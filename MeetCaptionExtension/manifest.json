@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Meet Caption Bridge",
+  "version": "0.2.0",
+  "description": "Captures Google Meet captions and sends them to PrivateBrowser.",
+
+  "permissions": [
+    "storage"
+  ],
+
+  "host_permissions": [
+    "https://meet.google.com/*",
+    "http://127.0.0.1:17832/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "https://meet.google.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
