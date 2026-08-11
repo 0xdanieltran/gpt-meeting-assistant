@@ -118,20 +118,6 @@
                     Margin="2"
                     Click="GoButton_Click"/>
 
-
-                <!-- Capture protection -->
-
-                <ToggleButton
-                    Grid.Column="5"
-                    x:Name="CaptureProtectionButton"
-                    Content="Protected"
-                    Width="100"
-                    Height="32"
-                    Margin="8,2,2,2"
-                    IsChecked="True"
-                    Checked="CaptureProtectionButton_Checked"
-                    Unchecked="CaptureProtectionButton_Unchecked"/>
-
             </Grid>
 
         </Border>

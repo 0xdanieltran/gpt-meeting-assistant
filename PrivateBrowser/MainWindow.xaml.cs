@@ -40,6 +40,17 @@ namespace PrivateBrowser
 
         private bool _isExiting = false;
 
+        // =========================================================
+        // HOTKEY SHOW/HIDE STATE
+        // =========================================================
+
+        private bool _browserHiddenByHotkey = false;
+
+        private double _savedLeft;
+        private double _savedTop;
+
+        private bool _savedPositionValid = false;
+
 
         private readonly WpfBrush[] _speakerPalette =
         {
@@ -501,11 +512,11 @@ namespace PrivateBrowser
         // GLOBAL HOTKEYS
         // =========================================================
 
-        private const int HOTKEY_LATEST_CAPTION =
-            1001;
-
-        private const int HOTKEY_ALL_CAPTIONS =
-            1002;
+        private const int HOTKEY_LATEST_CAPTION = 1001;
+        private const int HOTKEY_ALL_CAPTIONS = 1002;
+        private const int HOTKEY_COPY_LATEST_AND_SEND = 1003;
+        private const int HOTKEY_PASTE_AND_SEND = 1004;
+        private const int HOTKEY_TOGGLE_BROWSER = 1005;
 
 
         private const uint MOD_CONTROL =
@@ -518,11 +529,11 @@ namespace PrivateBrowser
             0x4000;
 
 
-        private const uint VK_C =
-            0x43;
-
-        private const uint VK_A =
-            0x41;
+        private const uint VK_C = 0x43;
+        private const uint VK_A = 0x41;
+        private const uint VK_S = 0x53;
+        private const uint VK_V = 0x56;
+        private const uint VK_Q = 0x51;
 
 
         private const int WM_HOTKEY =
@@ -575,6 +586,7 @@ namespace PrivateBrowser
 
             StateChanged +=
                 MainWindow_StateChanged;
+
         }
 
 
@@ -660,7 +672,7 @@ namespace PrivateBrowser
             showItem.Click +=
                 (_, _) =>
                 {
-                    ShowPrivateBrowser();
+                    ShowPrivateBrowserFromTrayOrHotkey();
                 };
 
             Forms.ToolStripMenuItem exitItem =
@@ -693,7 +705,7 @@ namespace PrivateBrowser
             _trayIcon.DoubleClick +=
                 (_, _) =>
                 {
-                    ShowPrivateBrowser();
+                    ShowPrivateBrowserFromTrayOrHotkey();
                 };
 
             // Also allow a normal left click to restore it.
@@ -705,7 +717,7 @@ namespace PrivateBrowser
                         Forms.MouseButtons.Left
                     )
                     {
-                        ShowPrivateBrowser();
+                        ShowPrivateBrowserFromTrayOrHotkey();
                     }
                 };
 
@@ -716,52 +728,170 @@ namespace PrivateBrowser
         }
 
 
-        private void ShowPrivateBrowser()
+        private void ShowPrivateBrowserFromTrayOrHotkey()
         {
-            Dispatcher.Invoke(
-                () =>
-                {
-                    if (
-                        _trayIcon != null
-                    )
+            Dispatcher.BeginInvoke(
+                new Action(
+                    () =>
                     {
-                        _trayIcon.Visible =
-                            true;
+                        if (_browserHiddenByHotkey)
+                        {
+                            RestorePrivateBrowserFromHotkey();
+
+                            return;
+                        }
+
+                        ShowPrivateBrowser();
                     }
-
-                    if (
-                        !IsVisible
-                    )
-                    {
-                        Show();
-                    }
-
-                    if (
-                        WindowState ==
-                        WindowState.Minimized
-                    )
-                    {
-                        WindowState =
-                            WindowState.Normal;
-                    }
-
-                    Activate();
-
-                    Topmost =
-                        true;
-                }
+                )
             );
         }
+
+
+        private void ShowPrivateBrowser()
+        {
+            Dispatcher.BeginInvoke(
+                new Action(
+                    () =>
+                    {
+                        if (_trayIcon != null)
+                        {
+                            _trayIcon.Visible =
+                                true;
+                        }
+
+                        if (!IsVisible)
+                        {
+                            Show();
+                        }
+
+                        if (
+                            WindowState ==
+                            WindowState.Minimized
+                        )
+                        {
+                            WindowState =
+                                WindowState.Normal;
+                        }
+
+                        Activate();
+
+                        Topmost =
+                            true;
+                    }
+                )
+            );
+        }
+
 
         private void HidePrivateBrowser()
         {
-            Dispatcher.Invoke(
-                () =>
-                {
-                    Hide();
-                }
+            Dispatcher.BeginInvoke(
+                new Action(
+                    () =>
+                    {
+                        Hide();
+
+                        if (_trayIcon != null)
+                        {
+                            _trayIcon.Visible =
+                                true;
+                        }
+                    }
+                )
             );
         }
+
+
+        private void HidePrivateBrowserByHotkey()
+        {
+            if (_browserHiddenByHotkey)
+            {
+                return;
+            }
+
+            _savedLeft =
+                Left;
+
+            _savedTop =
+                Top;
+
+            _savedPositionValid =
+                true;
+
+            // Keep the same WPF window and WebView2 instance alive.
+            // Move the window outside the visible desktop instead of
+            // calling Hide(), which can cause a black capture surface
+            // after restoring the window.
+            Topmost =
+                false;
+
+            Left =
+                SystemParameters.VirtualScreenLeft -
+                Math.Max(
+                    ActualWidth,
+                    Width
+                ) -
+                200;
+
+            Top =
+                SystemParameters.VirtualScreenTop -
+                Math.Max(
+                    ActualHeight,
+                    Height
+                ) -
+                200;
+
+            _browserHiddenByHotkey =
+                true;
+
+            if (_trayIcon != null)
+            {
+                _trayIcon.Visible =
+                    true;
+            }
+        }
+
+
+        private void RestorePrivateBrowserFromHotkey()
+        {
+            if (!_browserHiddenByHotkey)
+            {
+                ShowPrivateBrowser();
+
+                return;
+            }
+
+            if (
+                WindowState ==
+                WindowState.Minimized
+            )
+            {
+                WindowState =
+                    WindowState.Normal;
+            }
+
+            if (_savedPositionValid)
+            {
+                Left =
+                    _savedLeft;
+
+                Top =
+                    _savedTop;
+            }
+
+            Topmost =
+                true;
+
+            _browserHiddenByHotkey =
+                false;
+
+            Activate();
+
+            Focus();
+        }
+
+
 
         private void MainWindow_StateChanged(
             object? sender,
@@ -840,8 +970,6 @@ namespace PrivateBrowser
 
 
             RegisterCaptionHotkeys();
-
-            EnableCaptureProtection();
         }
 
 
@@ -901,6 +1029,28 @@ namespace PrivateBrowser
                     .EnsureCoreWebView2Async(
                         environment
                     );
+
+
+                // =====================================================
+                // ALWAYS-ON CAPTURE EXCLUSION
+                // =====================================================
+                //
+                // Apply once after WebView2 is fully initialized.
+                // Avoid repeatedly changing display affinity when the
+                // window is restored/activated because some capture paths
+                // can temporarily show a black composited region.
+                // =====================================================
+
+                await Task.Delay(
+                    200
+                );
+
+                bool protectedOk =
+                    EnableCaptureProtection();
+
+                System.Diagnostics.Debug.WriteLine(
+                    $"Capture protection after WebView2 init: {protectedOk}"
+                );
 
 
                 Browser.CoreWebView2
@@ -1066,39 +1216,17 @@ namespace PrivateBrowser
 
 
         // =========================================================
-        // CAPTURE PROTECTION BUTTON
+        // ALWAYS-ON CAPTURE PROTECTION
         // =========================================================
 
-        private void CaptureProtectionButton_Checked(
-            object sender,
-            RoutedEventArgs e
-        )
-        {
-            EnableCaptureProtection();
-        }
-
-
-        private void CaptureProtectionButton_Unchecked(
-            object sender,
-            RoutedEventArgs e
-        )
-        {
-            DisableCaptureProtection();
-        }
-
-
-        // =========================================================
-        // CAPTURE PROTECTION
-        // =========================================================
-
-        private void EnableCaptureProtection()
+        private bool EnableCaptureProtection()
         {
             if (
                 _windowHandle ==
                 IntPtr.Zero
             )
             {
-                return;
+                return false;
             }
 
 
@@ -1109,8 +1237,17 @@ namespace PrivateBrowser
                 );
 
 
-            int setError =
-                Marshal.GetLastWin32Error();
+            if (!setOk)
+            {
+                int setError =
+                    Marshal.GetLastWin32Error();
+
+                System.Diagnostics.Debug.WriteLine(
+                    $"Capture protection failed. Win32 error: {setError}"
+                );
+
+                return false;
+            }
 
 
             bool getOk =
@@ -1120,81 +1257,19 @@ namespace PrivateBrowser
                 );
 
 
-            int getError =
-                Marshal.GetLastWin32Error();
-
-
-            if (
-                setOk &&
+            bool protectedSuccessfully =
                 getOk &&
                 currentAffinity ==
-                WDA_EXCLUDEFROMCAPTURE
-            )
-            {
-                if (
-                    CaptureProtectionButton !=
-                    null
-                )
-                {
-                    CaptureProtectionButton.Content =
-                        "🟢 Protected";
-                }
-            }
-            else
-            {
-                if (
-                    CaptureProtectionButton !=
-                    null
-                )
-                {
-                    CaptureProtectionButton.Content =
-                        "⚠ Protection Failed";
-                }
+                WDA_EXCLUDEFROMCAPTURE;
 
 
-                System.Windows.MessageBox.Show(
-                    "Capture protection could not be enabled.\n\n" +
-                    $"Set result: {setOk}\n" +
-                    $"Set error: {setError}\n" +
-                    $"Read result: {getOk}\n" +
-                    $"Read error: {getError}\n" +
-                    $"Affinity: 0x{currentAffinity:X8}",
-                    "PrivateBrowser",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning
-                );
-            }
-        }
+            System.Diagnostics.Debug.WriteLine(
+                $"Capture protection active: {protectedSuccessfully}; " +
+                $"Affinity: 0x{currentAffinity:X8}"
+            );
 
 
-        private void DisableCaptureProtection()
-        {
-            if (
-                _windowHandle ==
-                IntPtr.Zero
-            )
-            {
-                return;
-            }
-
-
-            bool success =
-                SetWindowDisplayAffinity(
-                    _windowHandle,
-                    WDA_NONE
-                );
-
-
-            if (
-                CaptureProtectionButton !=
-                null
-            )
-            {
-                CaptureProtectionButton.Content =
-                    success
-                        ? "Protection Off"
-                        : "⚠ Failed";
-            }
+            return protectedSuccessfully;
         }
 
 
@@ -1204,63 +1279,89 @@ namespace PrivateBrowser
 
         private void RegisterCaptionHotkeys()
         {
-            if (
-                _windowHandle ==
-                IntPtr.Zero
-            )
+            if (_windowHandle == IntPtr.Zero)
             {
                 return;
             }
 
+            UnregisterHotKey(_windowHandle, HOTKEY_LATEST_CAPTION);
+            UnregisterHotKey(_windowHandle, HOTKEY_ALL_CAPTIONS);
+            UnregisterHotKey(_windowHandle, HOTKEY_COPY_LATEST_AND_SEND);
+            UnregisterHotKey(_windowHandle, HOTKEY_PASTE_AND_SEND);
+            UnregisterHotKey(_windowHandle, HOTKEY_TOGGLE_BROWSER);
 
-            bool latestRegistered =
+            RegisterRequiredHotkey(
+                HOTKEY_LATEST_CAPTION,
+                VK_C,
+                "Ctrl + Shift + C"
+            );
+
+            RegisterRequiredHotkey(
+                HOTKEY_ALL_CAPTIONS,
+                VK_A,
+                "Ctrl + Shift + A"
+            );
+
+            RegisterRequiredHotkey(
+                HOTKEY_COPY_LATEST_AND_SEND,
+                VK_S,
+                "Ctrl + Shift + S"
+            );
+
+            RegisterRequiredHotkey(
+                HOTKEY_PASTE_AND_SEND,
+                VK_V,
+                "Ctrl + Shift + V"
+            );
+
+            RegisterRequiredHotkey(
+                HOTKEY_TOGGLE_BROWSER,
+                VK_Q,
+                "Ctrl + Shift + Q"
+            );
+        }
+
+
+        private void RegisterRequiredHotkey(
+            int id,
+            uint virtualKey,
+            string displayName
+        )
+        {
+            bool registered =
                 RegisterHotKey(
                     _windowHandle,
-                    HOTKEY_LATEST_CAPTION,
+                    id,
                     MOD_CONTROL |
                     MOD_SHIFT |
                     MOD_NOREPEAT,
-                    VK_C
+                    virtualKey
                 );
 
-
-            bool allRegistered =
-                RegisterHotKey(
-                    _windowHandle,
-                    HOTKEY_ALL_CAPTIONS,
-                    MOD_CONTROL |
-                    MOD_SHIFT |
-                    MOD_NOREPEAT,
-                    VK_A
-                );
-
-
-            if (
-                !latestRegistered
-            )
+            if (registered)
             {
-                System.Windows.MessageBox.Show(
-                    "Could not register Ctrl + Shift + C.\n" +
-                    "Another application may already be using it.",
-                    "Hotkey Error",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning
+                System.Diagnostics.Debug.WriteLine(
+                    $"{displayName} registered successfully."
                 );
+
+                return;
             }
 
+            int error =
+                Marshal.GetLastWin32Error();
 
-            if (
-                !allRegistered
-            )
-            {
-                System.Windows.MessageBox.Show(
-                    "Could not register Ctrl + Shift + A.\n" +
-                    "Another application may already be using it.",
-                    "Hotkey Error",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning
-                );
-            }
+            System.Diagnostics.Debug.WriteLine(
+                $"{displayName} registration failed. Win32 error: {error}"
+            );
+
+            System.Windows.MessageBox.Show(
+                $"{displayName} could not be registered.\n\n" +
+                "Another application may already be using this global shortcut.\n" +
+                $"Windows error: {error}",
+                "PrivateBrowser Hotkey Error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning
+            );
         }
 
 
@@ -1297,8 +1398,7 @@ namespace PrivateBrowser
 
                     CopyLatestCaption();
 
-                    handled =
-                        true;
+                    handled = true;
 
                     break;
 
@@ -1307,8 +1407,40 @@ namespace PrivateBrowser
 
                     CopyAllCaptions();
 
-                    handled =
-                        true;
+                    handled = true;
+
+                    break;
+
+
+                case HOTKEY_COPY_LATEST_AND_SEND:
+
+                    handled = true;
+
+                    Dispatcher.BeginInvoke(
+                        new Action(
+                            async () =>
+                            {
+                                await CopyLatestAndSendAsync();
+                            }
+                        )
+                    );
+
+                    break;
+
+
+                case HOTKEY_PASTE_AND_SEND:
+
+                    PasteClipboardAndSend();
+
+                    handled = true;
+
+                    break;
+
+                case HOTKEY_TOGGLE_BROWSER:
+
+                    TogglePrivateBrowser();
+
+                    handled = true;
 
                     break;
             }
@@ -1421,6 +1553,140 @@ namespace PrivateBrowser
                     $"CopyAllCaptions error: {ex}"
                 );
             }
+        }
+
+
+        private async Task CopyLatestAndSendAsync()
+        {
+            try
+            {
+                CaptionItem? latestItem =
+                    _captionStore.GetLatest();
+
+                if (latestItem == null)
+                {
+                    System.Windows.MessageBox.Show(
+                        "There is no latest caption to send.",
+                        "PrivateBrowser",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information
+                    );
+
+                    return;
+                }
+
+                string text =
+                    string.IsNullOrWhiteSpace(
+                        latestItem.Speaker
+                    )
+                        ? latestItem.Text
+                        : $"{latestItem.Speaker}: {latestItem.Text}";
+
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    System.Windows.MessageBox.Show(
+                        "The latest caption is empty.",
+                        "PrivateBrowser",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information
+                    );
+
+                    return;
+                }
+
+                bool copied =
+                    await TrySetClipboardTextAsync(
+                        text
+                    );
+
+                if (!copied)
+                {
+                    System.Windows.MessageBox.Show(
+                        "Could not copy the latest caption.",
+                        "PrivateBrowser",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning
+                    );
+
+                    return;
+                }
+
+                await PasteIntoChatGptAndSendAsync(
+                    text
+                );
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show(
+                    $"Ctrl + Shift + S failed:\n\n{ex.Message}",
+                    "PrivateBrowser",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error
+                );
+            }
+        }
+
+
+        private async void PasteClipboardAndSend()
+        {
+            try
+            {
+                string text;
+
+                try
+                {
+                    if (!WpfClipboard.ContainsText())
+                    {
+                        return;
+                    }
+
+                    text =
+                        WpfClipboard.GetText();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"Clipboard read failed: {ex}"
+                    );
+
+                    return;
+                }
+
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    return;
+                }
+
+                await PasteIntoChatGptAndSendAsync(
+                    text
+                );
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"PasteClipboardAndSend error: {ex}"
+                );
+            }
+        }
+
+
+        private void TogglePrivateBrowser()
+        {
+            Dispatcher.BeginInvoke(
+                new Action(
+                    () =>
+                    {
+                        if (_browserHiddenByHotkey)
+                        {
+                            RestorePrivateBrowserFromHotkey();
+                        }
+                        else
+                        {
+                            HidePrivateBrowserByHotkey();
+                        }
+                    }
+                )
+            );
         }
 
 
@@ -1538,6 +1804,20 @@ namespace PrivateBrowser
                 UnregisterHotKey(
                     _windowHandle,
                     HOTKEY_ALL_CAPTIONS
+                );
+
+                UnregisterHotKey(
+                    _windowHandle,
+                    HOTKEY_COPY_LATEST_AND_SEND
+                );
+
+                UnregisterHotKey(
+                    _windowHandle,
+                    HOTKEY_PASTE_AND_SEND
+                );
+                UnregisterHotKey(
+                    _windowHandle,
+                    HOTKEY_TOGGLE_BROWSER
                 );
             }
 

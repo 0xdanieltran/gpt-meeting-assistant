@@ -208,11 +208,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\Admiin\\privatebrowser\\privatebrowser\\PrivateBrowser.csproj",
+      "projectUniqueName": "C:\\Users\\Admiin\\PrivateBrowser\\privatebrowser\\PrivateBrowser.csproj",
       "projectName": "PrivateBrowser",
-      "projectPath": "C:\\Users\\Admiin\\privatebrowser\\privatebrowser\\PrivateBrowser.csproj",
+      "projectPath": "C:\\Users\\Admiin\\PrivateBrowser\\privatebrowser\\PrivateBrowser.csproj",
       "packagesPath": "C:\\Users\\Admiin\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\Admiin\\privatebrowser\\privatebrowser\\obj\\",
+      "outputPath": "C:\\Users\\Admiin\\PrivateBrowser\\privatebrowser\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\Admiin\\AppData\\Roaming\\NuGet\\NuGet.Config",
