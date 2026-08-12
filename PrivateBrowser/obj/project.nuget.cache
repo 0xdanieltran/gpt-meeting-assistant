@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "xTA8ZDmbXXw=",
+  "dgSpecHash": "RbhmKYFByg8=",
   "success": true,
-  "projectFilePath": "C:\\Users\\Admiin\\PrivateBrowser\\PrivateBrowser\\PrivateBrowser.csproj",
+  "projectFilePath": "C:\\Users\\Admiin\\PrivateBrowser\\privatebrowser\\PrivateBrowser.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\Admiin\\.nuget\\packages\\microsoft.web.webview2\\1.0.4129.50\\microsoft.web.webview2.1.0.4129.50.nupkg.sha512"
   ],

@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\Admiin\\PrivateBrowser\\PrivateBrowser\\PrivateBrowser.csproj": {}
+    "C:\\Users\\Admiin\\PrivateBrowser\\privatebrowser\\PrivateBrowser.csproj": {}
   },
   "projects": {
-    "C:\\Users\\Admiin\\PrivateBrowser\\PrivateBrowser\\PrivateBrowser.csproj": {
+    "C:\\Users\\Admiin\\PrivateBrowser\\privatebrowser\\PrivateBrowser.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\Admiin\\PrivateBrowser\\PrivateBrowser\\PrivateBrowser.csproj",
+        "projectUniqueName": "C:\\Users\\Admiin\\PrivateBrowser\\privatebrowser\\PrivateBrowser.csproj",
         "projectName": "PrivateBrowser",
-        "projectPath": "C:\\Users\\Admiin\\PrivateBrowser\\PrivateBrowser\\PrivateBrowser.csproj",
+        "projectPath": "C:\\Users\\Admiin\\PrivateBrowser\\privatebrowser\\PrivateBrowser.csproj",
         "packagesPath": "C:\\Users\\Admiin\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\Admiin\\PrivateBrowser\\PrivateBrowser\\obj\\",
+        "outputPath": "C:\\Users\\Admiin\\PrivateBrowser\\privatebrowser\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\Admiin\\AppData\\Roaming\\NuGet\\NuGet.Config",
