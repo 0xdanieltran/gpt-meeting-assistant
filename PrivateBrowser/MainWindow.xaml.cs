@@ -756,8 +756,7 @@ namespace PrivateBrowser
                     {
                         if (_trayIcon != null)
                         {
-                            _trayIcon.Visible =
-                                true;
+                            _trayIcon.Visible = true;
                         }
 
                         if (!IsVisible)
@@ -774,10 +773,13 @@ namespace PrivateBrowser
                                 WindowState.Normal;
                         }
 
+                        _browserHiddenByHotkey = false;
+
                         Activate();
 
-                        Topmost =
-                            true;
+                        Topmost = true;
+
+                        Focus();
                     }
                 )
             );
@@ -1676,14 +1678,26 @@ namespace PrivateBrowser
                 new Action(
                     () =>
                     {
+                        // Hidden by Ctrl+Shift+Q
                         if (_browserHiddenByHotkey)
                         {
                             RestorePrivateBrowserFromHotkey();
+                            return;
                         }
-                        else
+
+                        // Hidden normally by Minimize / X
+                        if (
+                            !IsVisible ||
+                            WindowState == WindowState.Minimized
+                        )
                         {
-                            HidePrivateBrowserByHotkey();
+                            ShowPrivateBrowser();
+                            return;
                         }
+
+                        // Currently visible → hide using the
+                        // off-screen method used by the hotkey.
+                        HidePrivateBrowserByHotkey();
                     }
                 )
             );
