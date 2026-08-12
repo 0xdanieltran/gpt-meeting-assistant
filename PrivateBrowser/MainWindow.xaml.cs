@@ -1061,7 +1061,7 @@ namespace PrivateBrowser
 
 
                 Navigate(
-                    "https://www.google.com"
+                    "https://chatgpt.com"
                 );
             }
             catch (Exception ex)
