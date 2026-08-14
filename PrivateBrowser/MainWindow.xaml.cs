@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows;
@@ -19,6 +20,10 @@ using WpfColor = System.Windows.Media.Color;
 using WpfSolidColorBrush = System.Windows.Media.SolidColorBrush;
 using WpfKeyEventArgs = System.Windows.Input.KeyEventArgs;
 using WpfClipboard = System.Windows.Clipboard;
+using WpfMessageBox = System.Windows.MessageBox;
+using WpfMessageBoxButton = System.Windows.MessageBoxButton;
+using WpfMessageBoxImage = System.Windows.MessageBoxImage;
+using WpfKey = System.Windows.Input.Key;
 
 namespace PrivateBrowser
 {
@@ -125,15 +130,52 @@ namespace PrivateBrowser
             TranscriptDocument.Blocks.Clear();
 
 
+            // =========================================================
+            // CURRENT IN-MEMORY CAPTION HISTORY
+            // =========================================================
+
+            if (history != null)
+            {
+                foreach (
+                    CaptionItem item
+                    in history
+                )
+                {
+                    string speaker =
+                        string.IsNullOrWhiteSpace(
+                            item.Speaker
+                        )
+                            ? "Interviewer"
+                            : item.Speaker;
+
+
+                    Paragraph paragraph =
+                        CreateTranscriptParagraph(
+                            speaker,
+                            item.Text
+                        );
+
+
+                    TranscriptDocument.Blocks.Add(
+                        paragraph
+                    );
+                }
+            }
+
+
+            // =========================================================
+            // NOTHING YET
+            // =========================================================
+
             if (
-                history == null ||
-                history.Count == 0
+                TranscriptDocument.Blocks.Count ==
+                0
             )
             {
                 Paragraph empty =
                     new Paragraph(
                         new Run(
-                            "Waiting for meeting captions..."
+                            "Waiting for live captions..."
                         )
                     );
 
@@ -147,6 +189,7 @@ namespace PrivateBrowser
                         )
                     );
 
+
                 empty.Margin =
                     new Thickness(
                         0
@@ -156,121 +199,104 @@ namespace PrivateBrowser
                 TranscriptDocument.Blocks.Add(
                     empty
                 );
-
-                return;
-            }
-
-
-            foreach (
-                CaptionItem item
-                in history
-            )
-            {
-                string speaker =
-                    string.IsNullOrWhiteSpace(
-                        item.Speaker
-                    )
-                        ? "Unknown speaker"
-                        : item.Speaker;
-
-
-                // =====================================================
-                // ONE CAPTION = ONE PARAGRAPH
-                // =====================================================
-
-                Paragraph paragraph =
-                    new Paragraph();
-
-
-                paragraph.Margin =
-                    new Thickness(
-                        0,
-                        0,
-                        0,
-                        14
-                    );
-
-
-                paragraph.LineHeight =
-                    21;
-
-
-                // =====================================================
-                // SPEAKER
-                // =====================================================
-
-                Run speakerRun =
-                    new Run(
-                        speaker
-                    );
-
-
-                speakerRun.FontWeight =
-                    FontWeights.Bold;
-
-                speakerRun.FontSize =
-                    13;
-
-                speakerRun.Foreground =
-                    GetSpeakerBrush(
-                        speaker
-                    );
-
-
-                paragraph.Inlines.Add(
-                    speakerRun
-                );
-
-
-                // =====================================================
-                // NEW LINE
-                // =====================================================
-
-                paragraph.Inlines.Add(
-                    new LineBreak()
-                );
-
-
-                // =====================================================
-                // CAPTION TEXT
-                // =====================================================
-
-                Run captionRun =
-                    new Run(
-                        item.Text
-                    );
-
-
-                captionRun.FontWeight =
-                    FontWeights.Normal;
-
-                captionRun.FontSize =
-                    14;
-
-                captionRun.Foreground =
-                    new WpfSolidColorBrush(
-                        WpfColor.FromRgb(
-                            38,
-                            38,
-                            38
-                        )
-                    );
-
-
-                paragraph.Inlines.Add(
-                    captionRun
-                );
-
-
-                TranscriptDocument.Blocks.Add(
-                    paragraph
-                );
             }
 
 
             TranscriptText.ScrollToEnd();
         }
 
+
+        private Paragraph CreateTranscriptParagraph(
+            string speaker,
+            string text
+        )
+        {
+            Paragraph paragraph =
+                new Paragraph();
+
+
+            paragraph.Margin =
+                new Thickness(
+                    0,
+                    0,
+                    0,
+                    14
+                );
+
+
+            paragraph.LineHeight =
+                21;
+
+
+            // =========================================================
+            // SPEAKER
+            // =========================================================
+
+            Run speakerRun =
+                new Run(
+                    speaker
+                );
+
+
+            speakerRun.FontWeight =
+                FontWeights.Bold;
+
+
+            speakerRun.FontSize =
+                13;
+
+
+            speakerRun.Foreground =
+                GetSpeakerBrush(
+                    speaker
+                );
+
+
+            paragraph.Inlines.Add(
+                speakerRun
+            );
+
+
+            paragraph.Inlines.Add(
+                new LineBreak()
+            );
+
+
+            // =========================================================
+            // TEXT
+            // =========================================================
+
+            Run captionRun =
+                new Run(
+                    text
+                );
+
+
+            captionRun.FontWeight =
+                FontWeights.Normal;
+
+
+            captionRun.FontSize =
+                14;
+
+
+            captionRun.Foreground =
+                new WpfSolidColorBrush(
+                    WpfColor.FromRgb(
+                        38,
+                        38,
+                        38
+                    )
+                );
+
+
+            paragraph.Inlines.Add(
+                captionRun
+            );
+
+
+            return paragraph;
+        }
 
         // =========================================================
         // CAPTION STORE + SERVER
@@ -279,14 +305,62 @@ namespace PrivateBrowser
         private readonly CaptionStore _captionStore =
             new CaptionStore();
 
-        private CaptionServer? _captionServer;
+        private readonly SystemAudioCaptureService _systemAudioCapture =
+            new SystemAudioCaptureService();
+
+        private WhisperTranscriptionService? _whisperService;
+
+        private readonly object _interviewerWhisperQueueLock =
+            new object();
+
+        private byte[]? _pendingInterviewerAudio;
+
+        private bool _interviewerWhisperProcessing =
+            false;
+
+        private readonly object _microphoneWhisperQueueLock =
+            new object();
+
+        private byte[]? _pendingMicrophoneAudio;
+
+        private bool _microphoneWhisperProcessing =
+            false;
+
+        private bool _whisperInitialized = false;
+
+        private VoiceActivityService? _voiceActivityService;
+
+        private readonly MicrophoneCaptureService _microphoneCapture =
+            new MicrophoneCaptureService();
+
+        private readonly LiveAudioBuffer _microphoneLiveAudioBuffer =
+                new LiveAudioBuffer();
+
+        private DateTime _lastMicrophoneSpeechTime =
+            DateTime.MinValue;
+
+        private bool _microphoneFinalizeScheduled =
+            false;
+
+        private DateTime _lastSpeechTime =
+            DateTime.MinValue;
+
+        private readonly TimeSpan _speechEndDelay =
+            TimeSpan.FromMilliseconds(
+                900
+            );
+
+        private bool _finalizeScheduled =
+            false;
+
+        private readonly LiveAudioBuffer _liveAudioBuffer =
+            new LiveAudioBuffer();
 
         private GridLength _lastCaptionWidth =
             new GridLength(380);
 
         private bool _captionsCollapsed =
             false;
-
         private void CaptionStore_Changed()
         {
             Dispatcher.BeginInvoke(
@@ -300,108 +374,18 @@ namespace PrivateBrowser
         {
             try
             {
-                CaptionItem? latest =
-                    _captionStore.GetLatest();
-
-
-                string? meetingKey =
-                    _captionStore
-                        .GetCurrentMeetingKey();
-
-
-                var history =
-                    _captionStore
-                        .GetHistory();
-
-
-                // =====================================================
-                // MEETING
-                // =====================================================
-
-                MeetingKeyText.Text =
-                    string.IsNullOrWhiteSpace(
-                        meetingKey
-                    )
-                        ? "No meeting"
-                        : $"Meeting: {meetingKey}";
-
-
-                // =====================================================
-                // COUNT
-                // =====================================================
-
-                CaptionCountText.Text =
-                    history.Count == 1
-                        ? "1 segment"
-                        : $"{history.Count} segments";
-
-
-                // =====================================================
-                // EMPTY
-                // =====================================================
-
-                if (
-                    latest == null
-                )
-                {
-                    LatestSpeakerText.Text =
-                        "Waiting for captions...";
-
-                    LatestCaptionText.Text =
-                        "Google Meet captions will appear here.";
-
-
-                    RenderTranscript(
-                        history
-                    );
-
-                    return;
-                }
-
-
-                // =====================================================
-                // LATEST SPEAKER
-                // =====================================================
-
-                LatestSpeakerText.Text =
-                    string.IsNullOrWhiteSpace(
-                        latest.Speaker
-                    )
-                        ? "Unknown speaker"
-                        : latest.Speaker;
-
-
-                // Match latest speaker color too.
-                LatestSpeakerText.Foreground =
-                    GetSpeakerBrush(
-                        latest.Speaker
-                    );
-
-
-                // =====================================================
-                // LATEST CAPTION
-                // =====================================================
-
-                LatestCaptionText.Text =
-                    latest.Text;
-
-
-                // =====================================================
-                // FULL FORMATTED TRANSCRIPT
-                // =====================================================
+                IReadOnlyList<CaptionItem> history =
+                    _captionStore.GetHistory();
 
                 RenderTranscript(
                     history
                 );
             }
-            catch (
-                Exception ex
-            )
+            catch (Exception ex)
             {
-                System.Diagnostics.Debug
-                    .WriteLine(
-                        $"Caption panel update failed: {ex}"
-                    );
+                System.Diagnostics.Debug.WriteLine(
+                    $"Caption panel update failed: {ex}"
+                );
             }
         }
 
@@ -476,13 +460,1441 @@ namespace PrivateBrowser
             }
         }
 
+        private void SystemAudioCapture_AudioAvailable(
+            byte[] buffer,
+            NAudio.Wave.WaveFormat format
+        )
+        {
+            try
+            {
+                byte[] converted =
+                    AudioConverter.To16KhzMonoPcm16(
+                        buffer,
+                        format
+                    );
+
+
+                double rms =
+                    CalculateRms(
+                        converted
+                    );
+
+
+                const double silenceThreshold =
+                    0.008;
+
+
+                bool containsAudio =
+                    rms >= silenceThreshold;
+
+                if (containsAudio)
+                {
+                    _lastSpeechTime =
+                        DateTime.UtcNow;
+                }
+                else
+                {
+                    ScheduleLiveCaptionFinalization();
+
+                    return;
+                }
+
+
+                _lastSpeechTime =
+                    DateTime.UtcNow;
+
+
+                _liveAudioBuffer.Add(
+                    converted
+                );
+
+                // =====================================================
+                // EARLY LIVE PREVIEW
+                // =====================================================
+
+                if (
+                    _liveAudioBuffer.HasPreviewReady()
+                )
+                {
+                    byte[] preview =
+                        _liveAudioBuffer.TakePreview();
+
+                    if (
+                        preview.Length > 0
+                    )
+                    {
+                        QueueInterviewerWhisper(
+                            preview
+                        );
+                    }
+                }
+
+
+                if (
+                    !_liveAudioBuffer.HasChunkReady()
+                )
+                {
+                    return;
+                }
+
+
+                byte[] chunk =
+                    _liveAudioBuffer.TakeChunk();
+
+
+                if (
+                    chunk.Length == 0
+                )
+                {
+                    return;
+                }
+
+
+                QueueInterviewerWhisper(
+                    chunk
+                );
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Live audio processing failed: {ex}"
+                );
+            }
+        }
+
+        private void QueueInterviewerWhisper(
+    byte[] audio
+)
+        {
+            if (
+                audio == null ||
+                audio.Length == 0
+            )
+            {
+                return;
+            }
+
+
+            bool shouldStart =
+                false;
+
+
+            lock (_interviewerWhisperQueueLock)
+            {
+                // Keep the newest waiting chunk.
+                //
+                // If Whisper is slower than incoming audio,
+                // we don't build a huge delayed queue.
+                _pendingInterviewerAudio =
+                    audio;
+
+
+                if (!_interviewerWhisperProcessing)
+                {
+                    _interviewerWhisperProcessing =
+                        true;
+
+                    shouldStart =
+                        true;
+                }
+            }
+
+
+            if (shouldStart)
+            {
+                _ =
+                    ProcessInterviewerWhisperQueueAsync();
+            }
+        }
+
+        private async Task ProcessInterviewerWhisperQueueAsync()
+        {
+            while (true)
+            {
+                byte[]? audio;
+
+
+                lock (_interviewerWhisperQueueLock)
+                {
+                    audio =
+                        _pendingInterviewerAudio;
+
+
+                    _pendingInterviewerAudio =
+                        null;
+
+
+                    if (audio == null)
+                    {
+                        _interviewerWhisperProcessing =
+                            false;
+
+                        return;
+                    }
+                }
+
+
+                await TranscribeLiveWhisperAsync(
+                    audio
+                );
+            }
+        }
+
+        private async Task TranscribeLiveWhisperAsync(
+            byte[] audio
+        )
+        {
+            if (
+                _whisperService == null ||
+                audio == null ||
+                audio.Length == 0
+            )
+            {
+                return;
+            }
+
+            try
+            {
+                if (_voiceActivityService != null)
+                {
+                    bool containsSpeech =
+                        await _voiceActivityService
+                            .ContainsSpeechAsync(
+                                audio
+                            );
+
+                    if (!containsSpeech)
+                    {
+                        return;
+                    }
+                }
+
+                string text =
+                    await _whisperService
+                        .TranscribeAsync(
+                            audio
+                        );
+
+                text =
+                    CleanWhisperText(
+                        text
+                    );
+
+                if (
+                    string.IsNullOrWhiteSpace(
+                        text
+                    )
+                )
+                {
+                    return;
+                }
+
+                text =
+                    text.Trim();
+
+                CaptionItem? latest =
+                    _captionStore.GetLatest();
+
+                bool sameSpeaker =
+                    latest != null
+                    &&
+                    string.Equals(
+                        latest.Speaker,
+                        "Interviewer",
+                        StringComparison.OrdinalIgnoreCase
+                    );
+
+                string existingText =
+                    sameSpeaker
+                        ? latest!.Text
+                        : string.Empty;
+
+                string mergedText =
+                    MergeWhisperCaption(
+                        existingText,
+                        text
+                    );
+
+                if (
+                    string.IsNullOrWhiteSpace(
+                        mergedText
+                    )
+                )
+                {
+                    return;
+                }
+
+                if (
+                    sameSpeaker
+                    &&
+                    string.Equals(
+                        latest!.Text,
+                        mergedText,
+                        StringComparison.Ordinal
+                    )
+                )
+                {
+                    return;
+                }
+
+                if (
+                    sameSpeaker
+                    &&
+                    !string.IsNullOrWhiteSpace(
+                        latest!.SegmentId
+                    )
+                )
+                {
+                    CaptionItem updatedCaption =
+                        new CaptionItem
+                        {
+                            Speaker =
+                                "Interviewer",
+
+                            Text =
+                                mergedText,
+
+                            Timestamp =
+                                DateTime.Now.ToString(
+                                    "HH:mm:ss"
+                                ),
+
+                            MeetingKey =
+                                null,
+
+                            SegmentId =
+                                latest.SegmentId
+                        };
+
+                    _captionStore.Add(
+                        updatedCaption
+                    );
+                }
+                else
+                {
+                    CaptionItem newCaption =
+                        new CaptionItem
+                        {
+                            Speaker =
+                                "Interviewer",
+
+                            Text =
+                                mergedText,
+
+                            Timestamp =
+                                DateTime.Now.ToString(
+                                    "HH:mm:ss"
+                                ),
+
+                            MeetingKey =
+                                null,
+
+                            SegmentId =
+                                Guid.NewGuid()
+                                    .ToString("N")
+                        };
+
+                    _captionStore.Add(
+                        newCaption
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Live Whisper failed: {ex}"
+                );
+            }
+        }
+
+        private static string MergeWhisperCaption(
+            string existingText,
+            string incomingText
+        )
+        {
+            existingText =
+                existingText?.Trim() ??
+                string.Empty;
+
+            incomingText =
+                incomingText?.Trim() ??
+                string.Empty;
+
+            if (
+                string.IsNullOrWhiteSpace(
+                    incomingText
+                )
+            )
+            {
+                return existingText;
+            }
+
+            if (
+                string.IsNullOrWhiteSpace(
+                    existingText
+                )
+            )
+            {
+                return incomingText;
+            }
+
+            if (
+                string.Equals(
+                    existingText,
+                    incomingText,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+            {
+                return existingText;
+            }
+
+            string[] existingWords =
+                existingText.Split(
+                    ' ',
+                    StringSplitOptions.RemoveEmptyEntries
+                );
+
+            string[] incomingWords =
+                incomingText.Split(
+                    ' ',
+                    StringSplitOptions.RemoveEmptyEntries
+                );
+
+            // Older text is protected. Only the recent tail may be revised.
+            const int editableTailWords =
+                20;
+
+            int protectedCount =
+                Math.Max(
+                    0,
+                    existingWords.Length -
+                    editableTailWords
+                );
+
+            string[] protectedWords =
+                existingWords
+                    .Take(
+                        protectedCount
+                    )
+                    .ToArray();
+
+            string[] recentWords =
+                existingWords
+                    .Skip(
+                        protectedCount
+                    )
+                    .ToArray();
+
+            int bestStart =
+                -1;
+
+            int bestMatches =
+                0;
+
+            double bestSimilarity =
+                0.0;
+
+            for (
+                int start = 0;
+                start < recentWords.Length;
+                start++
+            )
+            {
+                int compareCount =
+                    Math.Min(
+                        recentWords.Length - start,
+                        incomingWords.Length
+                    );
+
+                if (compareCount < 3)
+                {
+                    continue;
+                }
+
+                int matches =
+                    0;
+
+                for (
+                    int i = 0;
+                    i < compareCount;
+                    i++
+                )
+                {
+                    string oldWord =
+                        NormalizeWhisperWord(
+                            recentWords[
+                                start + i
+                            ]
+                        );
+
+                    string newWord =
+                        NormalizeWhisperWord(
+                            incomingWords[i]
+                        );
+
+                    if (
+                        string.Equals(
+                            oldWord,
+                            newWord,
+                            StringComparison.OrdinalIgnoreCase
+                        )
+                    )
+                    {
+                        matches++;
+                    }
+                }
+
+                double similarity =
+                    (double)matches /
+                    compareCount;
+
+                if (
+                    similarity >
+                    bestSimilarity
+                )
+                {
+                    bestSimilarity =
+                        similarity;
+
+                    bestMatches =
+                        matches;
+
+                    bestStart =
+                        start;
+                }
+            }
+
+            // New Whisper output is probably a corrected version
+            // of the recent unstable tail.
+            if (
+                bestStart >= 0
+                &&
+                bestMatches >= 3
+                &&
+                bestSimilarity >= 0.55
+            )
+            {
+                string stablePrefix =
+                    string.Join(
+                        " ",
+                        protectedWords
+                            .Concat(
+                                recentWords.Take(
+                                    bestStart
+                                )
+                            )
+                    );
+
+                if (
+                    string.IsNullOrWhiteSpace(
+                        stablePrefix
+                    )
+                )
+                {
+                    return incomingText;
+                }
+
+                return (
+                    stablePrefix +
+                    " " +
+                    incomingText
+                ).Trim();
+            }
+
+            // Exact suffix-prefix overlap fallback.
+            int maximumOverlap =
+                Math.Min(
+                    existingWords.Length,
+                    incomingWords.Length
+                );
+
+            maximumOverlap =
+                Math.Min(
+                    maximumOverlap,
+                    25
+                );
+
+            for (
+                int overlap = maximumOverlap;
+                overlap >= 1;
+                overlap--
+            )
+            {
+                bool matches =
+                    true;
+
+                for (
+                    int i = 0;
+                    i < overlap;
+                    i++
+                )
+                {
+                    string oldWord =
+                        NormalizeWhisperWord(
+                            existingWords[
+                                existingWords.Length -
+                                overlap +
+                                i
+                            ]
+                        );
+
+                    string newWord =
+                        NormalizeWhisperWord(
+                            incomingWords[i]
+                        );
+
+                    if (
+                        !string.Equals(
+                            oldWord,
+                            newWord,
+                            StringComparison.OrdinalIgnoreCase
+                        )
+                    )
+                    {
+                        matches =
+                            false;
+
+                        break;
+                    }
+                }
+
+                if (!matches)
+                {
+                    continue;
+                }
+
+                string additional =
+                    string.Join(
+                        " ",
+                        incomingWords.Skip(
+                            overlap
+                        )
+                    );
+
+                if (
+                    string.IsNullOrWhiteSpace(
+                        additional
+                    )
+                )
+                {
+                    return existingText;
+                }
+
+                return (
+                    existingText +
+                    " " +
+                    additional
+                ).Trim();
+            }
+
+            // Never throw away old stable text.
+            return (
+                existingText +
+                " " +
+                incomingText
+            ).Trim();
+        }
+
+
+
+        // private static string MergeWhisperChunk(
+        //     string existingText,
+        //     string incomingText
+        // )
+        // {
+        //     existingText =
+        //         existingText?.Trim() ??
+        //         string.Empty;
+
+        //     incomingText =
+        //         incomingText?.Trim() ??
+        //         string.Empty;
+
+
+        //     if (
+        //         string.IsNullOrWhiteSpace(
+        //             incomingText
+        //         )
+        //     )
+        //     {
+        //         return existingText;
+        //     }
+
+
+        //     if (
+        //         string.IsNullOrWhiteSpace(
+        //             existingText
+        //         )
+        //     )
+        //     {
+        //         return incomingText;
+        //     }
+
+
+        //     if (
+        //         string.Equals(
+        //             existingText,
+        //             incomingText,
+        //             StringComparison.OrdinalIgnoreCase
+        //         )
+        //     )
+        //     {
+        //         return existingText;
+        //     }
+
+
+        //     string[] existingWords =
+        //         existingText.Split(
+        //             ' ',
+        //             StringSplitOptions.RemoveEmptyEntries
+        //         );
+
+        //     string[] incomingWords =
+        //         incomingText.Split(
+        //             ' ',
+        //             StringSplitOptions.RemoveEmptyEntries
+        //         );
+
+
+        //     // =========================================================
+        //     // IMPORTANT:
+        //     //
+        //     // Never allow Whisper to rewrite the entire transcript.
+        //     // Only the most recent words are allowed to change.
+        //     // =========================================================
+
+        //     const int editableTailWords =
+        //         18;
+
+
+        //     int protectedWordCount =
+        //         Math.Max(
+        //             0,
+        //             existingWords.Length -
+        //             editableTailWords
+        //         );
+
+
+        //     // Everything before this point is considered permanent.
+        //     string protectedPrefix =
+        //         string.Join(
+        //             " ",
+        //             existingWords.Take(
+        //                 protectedWordCount
+        //             )
+        //         );
+
+
+        //     string[] editableTail =
+        //         existingWords
+        //             .Skip(
+        //                 protectedWordCount
+        //             )
+        //             .ToArray();
+
+
+        //     // =========================================================
+        //     // FIND OVERLAP BETWEEN RECENT OLD TEXT AND NEW WHISPER TEXT
+        //     // =========================================================
+
+        //     int bestOldIndex =
+        //         -1;
+
+        //     int bestMatchLength =
+        //         0;
+
+
+        //     for (
+        //         int start = 0;
+        //         start < editableTail.Length;
+        //         start++
+        //     )
+        //     {
+        //         int matchLength =
+        //             0;
+
+
+        //         while (
+        //             start + matchLength <
+        //             editableTail.Length
+        //             &&
+        //             matchLength <
+        //             incomingWords.Length
+        //         )
+        //         {
+        //             string oldWord =
+        //                 NormalizeWhisperWord(
+        //                     editableTail[
+        //                         start +
+        //                         matchLength
+        //                     ]
+        //                 );
+
+
+        //             string newWord =
+        //                 NormalizeWhisperWord(
+        //                     incomingWords[
+        //                         matchLength
+        //                     ]
+        //                 );
+
+
+        //             if (
+        //                 !string.Equals(
+        //                     oldWord,
+        //                     newWord,
+        //                     StringComparison.OrdinalIgnoreCase
+        //                 )
+        //             )
+        //             {
+        //                 break;
+        //             }
+
+
+        //             matchLength++;
+        //         }
+
+
+        //         if (
+        //             matchLength >
+        //             bestMatchLength
+        //         )
+        //         {
+        //             bestMatchLength =
+        //                 matchLength;
+
+        //             bestOldIndex =
+        //                 start;
+        //         }
+        //     }
+
+
+        //     // =========================================================
+        //     // WHISPER IS REVISING THE RECENT TAIL
+        //     // =========================================================
+
+        //     if (
+        //         bestOldIndex >= 0 &&
+        //         bestMatchLength >= 3
+        //     )
+        //     {
+        //         string tailBeforeMatch =
+        //             string.Join(
+        //                 " ",
+        //                 editableTail.Take(
+        //                     bestOldIndex
+        //                 )
+        //             );
+
+
+        //         string result =
+        //             string.Join(
+        //                 " ",
+        //                 new[]
+        //                 {
+        //             protectedPrefix,
+        //             tailBeforeMatch,
+        //             incomingText
+        //                 }
+        //                 .Where(
+        //                     value =>
+        //                         !string.IsNullOrWhiteSpace(
+        //                             value
+        //                         )
+        //                 )
+        //             );
+
+
+        //         return result.Trim();
+        //     }
+
+
+        //     // =========================================================
+        //     // NORMAL SUFFIX/PREFIX OVERLAP
+        //     // =========================================================
+
+        //     int maximumOverlap =
+        //         Math.Min(
+        //             editableTail.Length,
+        //             incomingWords.Length
+        //         );
+
+
+        //     for (
+        //         int overlap = maximumOverlap;
+        //         overlap >= 1;
+        //         overlap--
+        //     )
+        //     {
+        //         bool matches =
+        //             true;
+
+
+        //         for (
+        //             int i = 0;
+        //             i < overlap;
+        //             i++
+        //         )
+        //         {
+        //             string oldWord =
+        //                 NormalizeWhisperWord(
+        //                     editableTail[
+        //                         editableTail.Length -
+        //                         overlap +
+        //                         i
+        //                     ]
+        //                 );
+
+
+        //             string newWord =
+        //                 NormalizeWhisperWord(
+        //                     incomingWords[i]
+        //                 );
+
+
+        //             if (
+        //                 !string.Equals(
+        //                     oldWord,
+        //                     newWord,
+        //                     StringComparison.OrdinalIgnoreCase
+        //                 )
+        //             )
+        //             {
+        //                 matches =
+        //                     false;
+
+        //                 break;
+        //             }
+        //         }
+
+
+        //         if (!matches)
+        //         {
+        //             continue;
+        //         }
+
+
+        //         string newPart =
+        //             string.Join(
+        //                 " ",
+        //                 incomingWords.Skip(
+        //                     overlap
+        //                 )
+        //             );
+
+
+        //         if (
+        //             string.IsNullOrWhiteSpace(
+        //                 newPart
+        //             )
+        //         )
+        //         {
+        //             return existingText;
+        //         }
+
+
+        //         return (
+        //             existingText +
+        //             " " +
+        //             newPart
+        //         ).Trim();
+        //     }
+
+
+        //     // =========================================================
+        //     // NO OVERLAP FOUND
+        //     //
+        //     // Do NOT replace old text.
+        //     // Treat incoming speech as continuation.
+        //     // =========================================================
+
+        //     return (
+        //         existingText +
+        //         " " +
+        //         incomingText
+        //     ).Trim();
+        // }
+
+
+        private static string NormalizeWhisperWord(
+            string word
+        )
+        {
+            if (
+                string.IsNullOrWhiteSpace(
+                    word
+                )
+            )
+            {
+                return string.Empty;
+            }
+
+
+            return word
+                .Trim()
+                .Trim(
+                    '.',
+                    ',',
+                    '!',
+                    '?',
+                    ':',
+                    ';',
+                    '"',
+                    '\'',
+                    '(',
+                    ')',
+                    '[',
+                    ']'
+                );
+        }
+
+
+        private void ScheduleLiveCaptionFinalization()
+        {
+            if (_finalizeScheduled)
+            {
+                return;
+            }
+
+            _finalizeScheduled =
+                true;
+
+            _ =
+                FinalizeAfterSilenceAsync();
+        }
+
+
+        private async Task FinalizeAfterSilenceAsync()
+        {
+            try
+            {
+                await Task.Delay(
+                    _speechEndDelay
+                );
+
+                TimeSpan silenceDuration =
+                    DateTime.UtcNow -
+                    _lastSpeechTime;
+
+                if (
+                    silenceDuration <
+                    _speechEndDelay
+                )
+                {
+                    return;
+                }
+
+                byte[] remainingAudio =
+                    _liveAudioBuffer.TakeRemaining();
+
+                if (
+                    remainingAudio.Length > 0 &&
+                    _whisperService != null
+                )
+                {
+                    string text =
+                        await _whisperService
+                            .TranscribeAsync(
+                                remainingAudio
+                            );
+
+                    text =
+                        CleanWhisperText(
+                            text
+                        );
+
+                    if (
+                        !string.IsNullOrWhiteSpace(
+                            text
+                        )
+                    )
+                    {
+                        text =
+                            text.Trim();
+
+                        CaptionItem? latest =
+                            _captionStore.GetLatest();
+
+                        bool sameSpeaker =
+                            latest != null
+                            &&
+                            string.Equals(
+                                latest.Speaker,
+                                "Interviewer",
+                                StringComparison.OrdinalIgnoreCase
+                            );
+
+                        string existingText =
+                            sameSpeaker
+                                ? latest!.Text
+                                : string.Empty;
+
+                        string mergedText =
+                            MergeWhisperCaption(
+                                existingText,
+                                text
+                            );
+
+                        if (
+                            !string.IsNullOrWhiteSpace(
+                                mergedText
+                            )
+                        )
+                        {
+                            if (
+                                sameSpeaker
+                                &&
+                                !string.IsNullOrWhiteSpace(
+                                    latest!.SegmentId
+                                )
+                            )
+                            {
+                                if (
+                                    !string.Equals(
+                                        latest.Text,
+                                        mergedText,
+                                        StringComparison.Ordinal
+                                    )
+                                )
+                                {
+                                    CaptionItem updatedCaption =
+                                        new CaptionItem
+                                        {
+                                            Speaker =
+                                                "Interviewer",
+
+                                            Text =
+                                                mergedText,
+
+                                            Timestamp =
+                                                DateTime.Now.ToString(
+                                                    "HH:mm:ss"
+                                                ),
+
+                                            MeetingKey =
+                                                null,
+
+                                            SegmentId =
+                                                latest.SegmentId
+                                        };
+
+                                    _captionStore.Add(
+                                        updatedCaption
+                                    );
+                                }
+                            }
+                            else
+                            {
+                                CaptionItem newCaption =
+                                    new CaptionItem
+                                    {
+                                        Speaker =
+                                            "Interviewer",
+
+                                        Text =
+                                            mergedText,
+
+                                        Timestamp =
+                                            DateTime.Now.ToString(
+                                                "HH:mm:ss"
+                                            ),
+
+                                        MeetingKey =
+                                            null,
+
+                                        SegmentId =
+                                            Guid.NewGuid()
+                                                .ToString("N")
+                                    };
+
+                                _captionStore.Add(
+                                    newCaption
+                                );
+                            }
+                        }
+                    }
+                }
+
+                _liveAudioBuffer.Clear();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Caption finalization failed: {ex}"
+                );
+            }
+            finally
+            {
+                _finalizeScheduled =
+                    false;
+            }
+        }
+
+
+        private static string CleanWhisperText(
+    string text
+)
+        {
+            if (
+                string.IsNullOrWhiteSpace(
+                    text
+                )
+            )
+            {
+                return string.Empty;
+            }
+
+
+            text =
+                text.Trim();
+
+
+            // =========================================================
+            // PURE NON-SPEECH CAPTIONS
+            // =========================================================
+
+            string[] ignoredExact =
+            {
+        "[BLANK_AUDIO]",
+
+        "[music]",
+        "(music)",
+        "[Music]",
+        "(upbeat music)",
+
+        "[Applause]",
+        "(applause)",
+
+        "[Silence]",
+        "(silence)",
+        "(laughter)",
+        "[Laughter]",
+        "(laughing)",
+        "[Laughing]",
+        "(music playing)",
+        "[MUSIC PLAYING]",
+
+        "[Cough]",
+        "[Coughing]",
+        "(cough)",
+        "(coughing)",
+        "[cough]",
+        "[coughing]",
+
+        "[Keyboard]",
+        "[Keyboard typing]",
+        "[Typing]",
+        "(keyboard)",
+        "(keyboard typing)",
+        "(typing)",
+
+        "[Clicking]",
+        "(clicking)",
+        "[Mouse clicking]",
+        "(mouse clicking)",
+
+        "[Noise]",
+        "(noise)",
+
+        "[Breathing]",
+        "(breathing)",
+
+        "[Sniff]",
+        "[Sniffing]",
+        "(sniff)",
+        "(sniffing)",
+
+        "[Throat clearing]",
+        "(throat clearing)",
+
+        "[Sneeze]",
+        "[Sneezing]",
+        "(sneeze)",
+        "(sneezing)"
+    };
+
+
+            foreach (
+                string ignored
+                in ignoredExact
+            )
+            {
+                if (
+                    string.Equals(
+                        text,
+                        ignored,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
+                {
+                    return string.Empty;
+                }
+            }
+
+
+            // =========================================================
+            // REMOVE NON-SPEECH MARKERS INSIDE OTHERWISE VALID TEXT
+            // =========================================================
+
+            string[] removableMarkers =
+            {
+        "[BLANK_AUDIO]",
+
+        "[music]",
+        "(music)",
+        "(upbeat music)",
+
+        "[applause]",
+        "(applause)",
+
+        "[cough]",
+        "[coughing]",
+        "(cough)",
+        "(coughing)",
+
+        "[keyboard]",
+        "[keyboard typing]",
+        "[typing]",
+        "(keyboard)",
+        "(keyboard typing)",
+        "(typing)",
+
+        "[mouse clicking]",
+        "(mouse clicking)",
+        "[clicking]",
+        "(clicking)",
+
+        "[noise]",
+        "(noise)",
+
+        "[breathing]",
+        "(breathing)",
+
+        "[sniff]",
+        "[sniffing]",
+        "(sniff)",
+        "(sniffing)",
+
+        "[throat clearing]",
+        "(throat clearing)",
+
+        "[sneeze]",
+        "[sneezing]",
+        "(sneeze)",
+        "(sneezing)"
+    };
+
+
+            foreach (
+                string marker
+                in removableMarkers
+            )
+            {
+                text =
+                    text.Replace(
+                        marker,
+                        string.Empty,
+                        StringComparison.OrdinalIgnoreCase
+                    );
+            }
+
+
+            // =========================================================
+            // REMOVE COMMON LEADING CAPTION ARTIFACTS
+            // =========================================================
+
+            text =
+                text.TrimStart(
+                    ' ',
+                    '-',
+                    '•',
+                    '–',
+                    '—'
+                );
+
+
+            // =========================================================
+            // NORMALIZE WHITESPACE
+            // =========================================================
+
+            text =
+                string.Join(
+                    " ",
+                    text.Split(
+                        new[]
+                        {
+                    ' ',
+                    '\r',
+                    '\n',
+                    '\t'
+                        },
+                        StringSplitOptions.RemoveEmptyEntries
+                    )
+                );
+
+
+            text =
+                text.Trim();
+
+
+            if (
+                string.IsNullOrWhiteSpace(
+                    text
+                )
+            )
+            {
+                return string.Empty;
+            }
+
+
+            return text;
+        }
+
+        private static double CalculateRms(
+            byte[] pcm16
+        )
+        {
+            if (
+                pcm16 == null ||
+                pcm16.Length < 2
+            )
+            {
+                return 0;
+            }
+
+            double sumSquares = 0;
+
+            int sampleCount =
+                pcm16.Length / 2;
+
+            for (
+                int i = 0;
+                i + 1 < pcm16.Length;
+                i += 2
+            )
+            {
+                short sample =
+                    (short)(
+                        pcm16[i] |
+                        (pcm16[i + 1] << 8)
+                    );
+
+                double normalized =
+                    sample / 32768.0;
+
+                sumSquares +=
+                    normalized * normalized;
+            }
+
+            return Math.Sqrt(
+                sumSquares / sampleCount
+            );
+        }
 
         // =========================================================
         // DISPLAY AFFINITY
         // =========================================================
-
-        private const uint WDA_NONE =
-            0x00000000;
 
         private const uint WDA_EXCLUDEFROMCAPTURE =
             0x00000011;
@@ -575,6 +1987,13 @@ namespace PrivateBrowser
             _captionStore.Changed +=
                 CaptionStore_Changed;
 
+
+            _systemAudioCapture.AudioAvailable +=
+                SystemAudioCapture_AudioAvailable;
+
+            _microphoneCapture.AudioAvailable +=
+                MicrophoneCapture_AudioAvailable;
+
             SourceInitialized +=
                 MainWindow_SourceInitialized;
 
@@ -594,6 +2013,50 @@ namespace PrivateBrowser
         // WINDOW INITIALIZATION
         // =========================================================
 
+        private void InitializeWhisper()
+        {
+            if (_whisperInitialized)
+            {
+                return;
+            }
+
+            string modelPath =
+                System.IO.Path.Combine(
+                    AppContext.BaseDirectory,
+                    "Models",
+                    "ggml-base.en.bin"
+                );
+
+            _whisperService =
+                new WhisperTranscriptionService(
+                    modelPath
+                );
+
+            _whisperInitialized = true;
+
+            System.IO.File.AppendAllText(
+                System.IO.Path.Combine(
+                    AppContext.BaseDirectory,
+                    "whisper.log"
+                ),
+                $"Whisper initialized: {DateTime.Now}{Environment.NewLine}"
+            );
+        }
+
+        private void InitializeVoiceActivity()
+        {
+            string vadModelPath =
+                System.IO.Path.Combine(
+                    AppContext.BaseDirectory,
+                    "Models",
+                    "ggml-silero-v6.2.0.bin"
+                );
+
+            _voiceActivityService =
+                new VoiceActivityService(
+                    vadModelPath
+                );
+        }
 
         private void InitializeTrayIcon()
         {
@@ -649,7 +2112,7 @@ namespace PrivateBrowser
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine(
+                Console.WriteLine(
                     $"Tray icon load failed: {ex}"
                 );
 
@@ -792,13 +2255,7 @@ namespace PrivateBrowser
                 new Action(
                     () =>
                     {
-                        Hide();
-
-                        if (_trayIcon != null)
-                        {
-                            _trayIcon.Visible =
-                                true;
-                        }
+                        HidePrivateBrowserByHotkey();
                     }
                 )
             );
@@ -812,6 +2269,19 @@ namespace PrivateBrowser
                 return;
             }
 
+
+            // If minimized, normalize first so WebView2 keeps
+            // a valid composition surface.
+            if (
+                WindowState ==
+                WindowState.Minimized
+            )
+            {
+                WindowState =
+                    WindowState.Normal;
+            }
+
+
             _savedLeft =
                 Left;
 
@@ -821,31 +2291,40 @@ namespace PrivateBrowser
             _savedPositionValid =
                 true;
 
-            // Keep the same WPF window and WebView2 instance alive.
-            // Move the window outside the visible desktop instead of
-            // calling Hide(), which can cause a black capture surface
-            // after restoring the window.
+
+            // IMPORTANT:
+            // Do not call Hide().
+            // Keep the same WPF + WebView2 visual tree alive
+            // and move the window outside the visible desktop.
             Topmost =
                 false;
+
 
             Left =
                 SystemParameters.VirtualScreenLeft -
                 Math.Max(
-                    ActualWidth,
-                    Width
+                    ActualWidth > 0
+                        ? ActualWidth
+                        : Width,
+                    800
                 ) -
-                200;
+                300;
+
 
             Top =
                 SystemParameters.VirtualScreenTop -
                 Math.Max(
-                    ActualHeight,
-                    Height
+                    ActualHeight > 0
+                        ? ActualHeight
+                        : Height,
+                    600
                 ) -
-                200;
+                300;
+
 
             _browserHiddenByHotkey =
                 true;
+
 
             if (_trayIcon != null)
             {
@@ -864,6 +2343,7 @@ namespace PrivateBrowser
                 return;
             }
 
+
             if (
                 WindowState ==
                 WindowState.Minimized
@@ -872,6 +2352,7 @@ namespace PrivateBrowser
                 WindowState =
                     WindowState.Normal;
             }
+
 
             if (_savedPositionValid)
             {
@@ -882,45 +2363,68 @@ namespace PrivateBrowser
                     _savedTop;
             }
 
-            Topmost =
-                true;
 
             _browserHiddenByHotkey =
                 false;
 
+
+            Topmost =
+                true;
+
             Activate();
 
             Focus();
+
+
+            if (
+                Browser.CoreWebView2 !=
+                null
+            )
+            {
+                Browser.Focus();
+            }
         }
 
 
 
         private void MainWindow_StateChanged(
-            object? sender,
-            EventArgs e
-        )
+    object? sender,
+    EventArgs e
+)
         {
             if (
                 WindowState ==
                 WindowState.Minimized
             )
             {
-                HidePrivateBrowser();
+                Dispatcher.BeginInvoke(
+                    new Action(
+                        () =>
+                        {
+                            HidePrivateBrowserByHotkey();
+                        }
+                    )
+                );
             }
         }
 
         protected override void OnClosing(
-            System.ComponentModel.CancelEventArgs e
-        )
+    System.ComponentModel.CancelEventArgs e
+)
         {
-            if (
-                !_isExiting
-            )
+            if (!_isExiting)
             {
                 e.Cancel =
                     true;
 
-                HidePrivateBrowser();
+                Dispatcher.BeginInvoke(
+                    new Action(
+                        () =>
+                        {
+                            HidePrivateBrowserByHotkey();
+                        }
+                    )
+                );
 
                 return;
             }
@@ -987,19 +2491,6 @@ namespace PrivateBrowser
             try
             {
                 // -------------------------------------------------
-                // START LOCAL CAPTION SERVER
-                // -------------------------------------------------
-
-                _captionServer =
-                    new CaptionServer(
-                        _captionStore
-                    );
-
-                await _captionServer
-                    .StartAsync();
-
-
-                // -------------------------------------------------
                 // WEBVIEW2 PROFILE
                 // -------------------------------------------------
 
@@ -1063,14 +2554,102 @@ namespace PrivateBrowser
                 Navigate(
                     "https://chatgpt.com"
                 );
+
+                try
+                {
+                    _systemAudioCapture.Start();
+
+                    System.Diagnostics.Debug.WriteLine(
+                        "System audio capture started."
+                    );
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"System audio capture failed: {ex}"
+                    );
+
+                    WpfMessageBox.Show(
+                        $"System audio capture failed:\n\n{ex.Message}",
+                        "PrivateBrowser",
+                        WpfMessageBoxButton.OK,
+                        WpfMessageBoxImage.Warning
+                    );
+                }
+
+                try
+                {
+                    InitializeWhisper();
+
+                    System.Diagnostics.Debug.WriteLine(
+                        "Whisper initialized successfully."
+                    );
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"Whisper initialization failed: {ex}"
+                    );
+
+                    WpfMessageBox.Show(
+                        $"Whisper initialization failed:\n\n{ex.Message}",
+                        "PrivateBrowser",
+                        WpfMessageBoxButton.OK,
+                        WpfMessageBoxImage.Error
+                    );
+                }
+
+                try
+                {
+                    InitializeVoiceActivity();
+
+                    System.Diagnostics.Debug.WriteLine(
+                        "Voice activity detection initialized successfully."
+                    );
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"VAD initialization failed: {ex}"
+                    );
+
+                    WpfMessageBox.Show(
+                        $"Voice activity detection initialization failed:\n\n{ex.Message}",
+                        "PrivateBrowser",
+                        WpfMessageBoxButton.OK,
+                        WpfMessageBoxImage.Warning
+                    );
+                }
+
+                try
+                {
+                    _microphoneCapture.Start();
+
+                    System.Diagnostics.Debug.WriteLine(
+                        "Microphone capture started."
+                    );
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"Microphone capture failed: {ex}"
+                    );
+
+                    WpfMessageBox.Show(
+                        $"Microphone capture failed:\n\n{ex.Message}",
+                        "PrivateBrowser",
+                        WpfMessageBoxButton.OK,
+                        WpfMessageBoxImage.Warning
+                    );
+                }
             }
             catch (Exception ex)
             {
-                System.Windows.MessageBox.Show(
+                WpfMessageBox.Show(
                     $"PrivateBrowser initialization failed:\n\n{ex.Message}",
                     "PrivateBrowser",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error
+                    WpfMessageBoxButton.OK,
+                    WpfMessageBoxImage.Error
                 );
             }
         }
@@ -1170,7 +2749,7 @@ namespace PrivateBrowser
         {
             if (
                 e.Key ==
-                System.Windows.Input.Key.Enter
+                WpfKey.Enter
             )
             {
                 Navigate(
@@ -1356,13 +2935,13 @@ namespace PrivateBrowser
                 $"{displayName} registration failed. Win32 error: {error}"
             );
 
-            System.Windows.MessageBox.Show(
+            WpfMessageBox.Show(
                 $"{displayName} could not be registered.\n\n" +
                 "Another application may already be using this global shortcut.\n" +
                 $"Windows error: {error}",
                 "PrivateBrowser Hotkey Error",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning
+                WpfMessageBoxButton.OK,
+                WpfMessageBoxImage.Warning
             );
         }
 
@@ -1567,11 +3146,11 @@ namespace PrivateBrowser
 
                 if (latestItem == null)
                 {
-                    System.Windows.MessageBox.Show(
+                    WpfMessageBox.Show(
                         "There is no latest caption to send.",
                         "PrivateBrowser",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Information
+                        WpfMessageBoxButton.OK,
+                        WpfMessageBoxImage.Information
                     );
 
                     return;
@@ -1586,11 +3165,11 @@ namespace PrivateBrowser
 
                 if (string.IsNullOrWhiteSpace(text))
                 {
-                    System.Windows.MessageBox.Show(
+                    WpfMessageBox.Show(
                         "The latest caption is empty.",
                         "PrivateBrowser",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Information
+                        WpfMessageBoxButton.OK,
+                        WpfMessageBoxImage.Information
                     );
 
                     return;
@@ -1603,11 +3182,11 @@ namespace PrivateBrowser
 
                 if (!copied)
                 {
-                    System.Windows.MessageBox.Show(
+                    WpfMessageBox.Show(
                         "Could not copy the latest caption.",
                         "PrivateBrowser",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Warning
+                        WpfMessageBoxButton.OK,
+                        WpfMessageBoxImage.Warning
                     );
 
                     return;
@@ -1619,11 +3198,11 @@ namespace PrivateBrowser
             }
             catch (Exception ex)
             {
-                System.Windows.MessageBox.Show(
+                WpfMessageBox.Show(
                     $"Ctrl + Shift + S failed:\n\n{ex.Message}",
                     "PrivateBrowser",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error
+                    WpfMessageBoxButton.OK,
+                    WpfMessageBoxImage.Error
                 );
             }
         }
@@ -1789,6 +3368,24 @@ namespace PrivateBrowser
             _captionStore.Changed -=
                 CaptionStore_Changed;
 
+            _systemAudioCapture.AudioAvailable -=
+                SystemAudioCapture_AudioAvailable;
+            _microphoneCapture.AudioAvailable -=
+                MicrophoneCapture_AudioAvailable;
+
+            _systemAudioCapture.Dispose();
+            _microphoneCapture.Dispose();
+
+            _whisperService?.Dispose();
+            _whisperService =
+                null;
+
+            _voiceActivityService?.Dispose();
+            _voiceActivityService =
+                null;
+
+            _liveAudioBuffer.Clear();
+            _microphoneLiveAudioBuffer.Clear();
 
             if (
                 _trayIcon !=
@@ -1834,32 +3431,6 @@ namespace PrivateBrowser
                     HOTKEY_TOGGLE_BROWSER
                 );
             }
-
-
-            if (
-                _captionServer !=
-                null
-            )
-            {
-                try
-                {
-                    await _captionServer
-                        .StopAsync();
-                }
-                catch (
-                    Exception ex
-                )
-                {
-                    System.Diagnostics.Debug
-                        .WriteLine(
-                            $"Caption server shutdown error: {ex}"
-                        );
-                }
-
-
-                _captionServer =
-                    null;
-            }
         }
 
         // =========================================================
@@ -1886,8 +3457,26 @@ namespace PrivateBrowser
             RoutedEventArgs e
         )
         {
+            _liveAudioBuffer.Clear();
+            _microphoneLiveAudioBuffer.Clear();
+
+            lock (_interviewerWhisperQueueLock)
+            {
+                _pendingInterviewerAudio =
+                    null;
+            }
+
+            lock (_microphoneWhisperQueueLock)
+            {
+                _pendingMicrophoneAudio =
+                    null;
+            }
+
             _captionStore.Clear();
+
+            UpdateCaptionPanel();
         }
+
 
         private async void PasteAndSendButton_Click(
             object sender,
@@ -1911,11 +3500,11 @@ namespace PrivateBrowser
                         !WpfClipboard.ContainsText()
                     )
                     {
-                        System.Windows.MessageBox.Show(
+                        WpfMessageBox.Show(
                             "Clipboard does not contain text.",
                             "PrivateBrowser",
-                            MessageBoxButton.OK,
-                            MessageBoxImage.Information
+                            WpfMessageBoxButton.OK,
+                            WpfMessageBoxImage.Information
                         );
 
                         return;
@@ -1950,11 +3539,11 @@ namespace PrivateBrowser
                     $"Paste & Send failed: {ex}"
                 );
 
-                System.Windows.MessageBox.Show(
+                WpfMessageBox.Show(
                     $"Paste & Send failed:\n\n{ex.Message}",
                     "PrivateBrowser",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning
+                    WpfMessageBoxButton.OK,
+                    WpfMessageBoxImage.Warning
                 );
             }
         }
@@ -1981,11 +3570,11 @@ namespace PrivateBrowser
                 )
             )
             {
-                System.Windows.MessageBox.Show(
+                WpfMessageBox.Show(
                     "Please open ChatGPT first.",
                     "PrivateBrowser",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information
+                    WpfMessageBoxButton.OK,
+                    WpfMessageBoxImage.Information
                 );
 
                 return;
@@ -2188,5 +3777,502 @@ namespace PrivateBrowser
         //             $"{Math.Round(percent)}%";
         //     }
         // }
+
+        private void MicrophoneCapture_AudioAvailable(
+            byte[] buffer,
+            NAudio.Wave.WaveFormat format
+        )
+        {
+            try
+            {
+                byte[] converted =
+                    AudioConverter.To16KhzMonoPcm16(
+                        buffer,
+                        format
+                    );
+
+                double rms =
+                    CalculateRms(
+                        converted
+                    );
+
+                const double silenceThreshold =
+                    0.008;
+
+                bool containsAudio =
+                    rms >= silenceThreshold;
+
+                if (containsAudio)
+                {
+                    _lastMicrophoneSpeechTime =
+                        DateTime.UtcNow;
+                }
+                else
+                {
+                    ScheduleMicrophoneFinalization();
+                    return;
+                }
+
+                _microphoneLiveAudioBuffer.Add(
+                    converted
+                );
+
+                if (
+                    !_microphoneLiveAudioBuffer.HasChunkReady()
+                )
+                {
+                    return;
+                }
+
+                byte[] chunk =
+                    _microphoneLiveAudioBuffer.TakeChunk();
+
+                if (
+                    chunk.Length == 0
+                )
+                {
+                    return;
+                }
+
+                QueueMicrophoneWhisper(
+                    chunk
+                );
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Microphone audio processing failed: {ex}"
+                );
+            }
+        }
+
+        private void QueueMicrophoneWhisper(
+    byte[] audio
+)
+        {
+            if (
+                audio == null ||
+                audio.Length == 0
+            )
+            {
+                return;
+            }
+
+
+            bool shouldStart =
+                false;
+
+
+            lock (_microphoneWhisperQueueLock)
+            {
+                _pendingMicrophoneAudio =
+                    audio;
+
+
+                if (!_microphoneWhisperProcessing)
+                {
+                    _microphoneWhisperProcessing =
+                        true;
+
+                    shouldStart =
+                        true;
+                }
+            }
+
+
+            if (shouldStart)
+            {
+                _ =
+                    ProcessMicrophoneWhisperQueueAsync();
+            }
+        }
+
+        private async Task ProcessMicrophoneWhisperQueueAsync()
+        {
+            while (true)
+            {
+                byte[]? audio;
+
+
+                lock (_microphoneWhisperQueueLock)
+                {
+                    audio =
+                        _pendingMicrophoneAudio;
+
+
+                    _pendingMicrophoneAudio =
+                        null;
+
+
+                    if (audio == null)
+                    {
+                        _microphoneWhisperProcessing =
+                            false;
+
+                        return;
+                    }
+                }
+
+
+                await TranscribeMicrophoneWhisperAsync(
+                    audio
+                );
+            }
+        }
+
+        private async Task TranscribeMicrophoneWhisperAsync(
+            byte[] audio
+        )
+        {
+            if (
+                _whisperService == null ||
+                audio == null ||
+                audio.Length == 0
+            )
+            {
+                return;
+            }
+
+            try
+            {
+                if (_voiceActivityService != null)
+                {
+                    bool containsSpeech =
+                        await _voiceActivityService
+                            .ContainsSpeechAsync(
+                                audio
+                            );
+
+                    if (!containsSpeech)
+                    {
+                        return;
+                    }
+                }
+
+                string text =
+                    await _whisperService
+                        .TranscribeAsync(
+                            audio
+                        );
+
+                text =
+                    CleanWhisperText(
+                        text
+                    );
+
+                if (
+                    string.IsNullOrWhiteSpace(
+                        text
+                    )
+                )
+                {
+                    return;
+                }
+
+                text =
+                    text.Trim();
+
+                CaptionItem? latest =
+                    _captionStore.GetLatest();
+
+                bool sameSpeaker =
+                    latest != null
+                    &&
+                    string.Equals(
+                        latest.Speaker,
+                        "Me",
+                        StringComparison.OrdinalIgnoreCase
+                    );
+
+                string existingText =
+                    sameSpeaker
+                        ? latest!.Text
+                        : string.Empty;
+
+                string mergedText =
+                    MergeWhisperCaption(
+                        existingText,
+                        text
+                    );
+
+                if (
+                    string.IsNullOrWhiteSpace(
+                        mergedText
+                    )
+                )
+                {
+                    return;
+                }
+
+                if (
+                    sameSpeaker
+                    &&
+                    string.Equals(
+                        latest!.Text,
+                        mergedText,
+                        StringComparison.Ordinal
+                    )
+                )
+                {
+                    return;
+                }
+
+                if (
+                    sameSpeaker
+                    &&
+                    !string.IsNullOrWhiteSpace(
+                        latest!.SegmentId
+                    )
+                )
+                {
+                    CaptionItem updatedCaption =
+                        new CaptionItem
+                        {
+                            Speaker =
+                                "Me",
+
+                            Text =
+                                mergedText,
+
+                            Timestamp =
+                                DateTime.Now.ToString(
+                                    "HH:mm:ss"
+                                ),
+
+                            MeetingKey =
+                                null,
+
+                            SegmentId =
+                                latest.SegmentId
+                        };
+
+                    _captionStore.Add(
+                        updatedCaption
+                    );
+                }
+                else
+                {
+                    CaptionItem newCaption =
+                        new CaptionItem
+                        {
+                            Speaker =
+                                "Me",
+
+                            Text =
+                                mergedText,
+
+                            Timestamp =
+                                DateTime.Now.ToString(
+                                    "HH:mm:ss"
+                                ),
+
+                            MeetingKey =
+                                null,
+
+                            SegmentId =
+                                Guid.NewGuid()
+                                    .ToString("N")
+                        };
+
+                    _captionStore.Add(
+                        newCaption
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Microphone Whisper failed: {ex}"
+                );
+            }
+        }
+
+        private void ScheduleMicrophoneFinalization()
+        {
+            if (_microphoneFinalizeScheduled)
+            {
+                return;
+            }
+
+            if (
+                _microphoneLiveAudioBuffer.Length <= 0
+            )
+            {
+                return;
+            }
+
+            _microphoneFinalizeScheduled =
+                true;
+
+            _ =
+                FinalizeMicrophoneAfterSilenceAsync();
+        }
+
+        private async Task FinalizeMicrophoneAfterSilenceAsync()
+        {
+            try
+            {
+                await Task.Delay(
+                    _speechEndDelay
+                );
+
+                TimeSpan silenceDuration =
+                    DateTime.UtcNow -
+                    _lastMicrophoneSpeechTime;
+
+                if (
+                    silenceDuration <
+                    _speechEndDelay
+                )
+                {
+                    return;
+                }
+
+                byte[] remainingAudio =
+                    _microphoneLiveAudioBuffer
+                        .TakeRemaining();
+
+                if (
+                    remainingAudio.Length > 0 &&
+                    _whisperService != null
+                )
+                {
+                    string text =
+                        await _whisperService
+                            .TranscribeAsync(
+                                remainingAudio
+                            );
+
+                    text =
+                        CleanWhisperText(
+                            text
+                        );
+
+                    if (
+                        !string.IsNullOrWhiteSpace(
+                            text
+                        )
+                    )
+                    {
+                        text =
+                            text.Trim();
+
+                        CaptionItem? latest =
+                            _captionStore.GetLatest();
+
+                        bool sameSpeaker =
+                            latest != null
+                            &&
+                            string.Equals(
+                                latest.Speaker,
+                                "Me",
+                                StringComparison.OrdinalIgnoreCase
+                            );
+
+                        string existingText =
+                            sameSpeaker
+                                ? latest!.Text
+                                : string.Empty;
+
+                        string mergedText =
+                            MergeWhisperCaption(
+                                existingText,
+                                text
+                            );
+
+                        if (
+                            !string.IsNullOrWhiteSpace(
+                                mergedText
+                            )
+                        )
+                        {
+                            if (
+                                sameSpeaker
+                                &&
+                                !string.IsNullOrWhiteSpace(
+                                    latest!.SegmentId
+                                )
+                            )
+                            {
+                                if (
+                                    !string.Equals(
+                                        latest.Text,
+                                        mergedText,
+                                        StringComparison.Ordinal
+                                    )
+                                )
+                                {
+                                    CaptionItem updatedCaption =
+                                        new CaptionItem
+                                        {
+                                            Speaker =
+                                                "Me",
+
+                                            Text =
+                                                mergedText,
+
+                                            Timestamp =
+                                                DateTime.Now.ToString(
+                                                    "HH:mm:ss"
+                                                ),
+
+                                            MeetingKey =
+                                                null,
+
+                                            SegmentId =
+                                                latest.SegmentId
+                                        };
+
+                                    _captionStore.Add(
+                                        updatedCaption
+                                    );
+                                }
+                            }
+                            else
+                            {
+                                CaptionItem newCaption =
+                                    new CaptionItem
+                                    {
+                                        Speaker =
+                                            "Me",
+
+                                        Text =
+                                            mergedText,
+
+                                        Timestamp =
+                                            DateTime.Now.ToString(
+                                                "HH:mm:ss"
+                                            ),
+
+                                        MeetingKey =
+                                            null,
+
+                                        SegmentId =
+                                            Guid.NewGuid()
+                                                .ToString("N")
+                                    };
+
+                                _captionStore.Add(
+                                    newCaption
+                                );
+                            }
+                        }
+                    }
+                }
+
+                _microphoneLiveAudioBuffer.Clear();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Microphone finalization failed: {ex}"
+                );
+            }
+            finally
+            {
+                _microphoneFinalizeScheduled =
+                    false;
+            }
+        }
     }
 }

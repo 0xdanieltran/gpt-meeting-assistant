@@ -7,25 +7,31 @@ namespace PrivateBrowser
 {
     public class CaptionStore
     {
-        private readonly object _lock = new();
+        private readonly object _lock =
+            new object();
 
-        private readonly List<CaptionItem> _history = new();
+        private readonly List<CaptionItem> _history =
+            new List<CaptionItem>();
 
         private CaptionItem? _latest;
 
-        private string? _currentMeetingKey;
 
         public event Action? Changed;
 
 
+        // =========================================================
+        // COMPATIBILITY
+        // =========================================================
+
         public string? GetCurrentMeetingKey()
         {
-            lock (_lock)
-            {
-                return _currentMeetingKey;
-            }
+            return null;
         }
 
+
+        // =========================================================
+        // LATEST
+        // =========================================================
 
         public CaptionItem? GetLatest()
         {
@@ -36,6 +42,10 @@ namespace PrivateBrowser
         }
 
 
+        // =========================================================
+        // HISTORY
+        // =========================================================
+
         public IReadOnlyList<CaptionItem> GetHistory()
         {
             lock (_lock)
@@ -45,21 +55,48 @@ namespace PrivateBrowser
         }
 
 
-        public void Add(CaptionItem caption)
+        // =========================================================
+        // ADD / UPDATE CAPTION
+        // =========================================================
+        //
+        // Use this when you already have a CaptionItem and want
+        // to update an existing SegmentId or add a new item.
+        // =========================================================
+
+        public void Add(
+            CaptionItem caption
+        )
         {
             if (caption == null)
+            {
                 return;
+            }
 
-            if (string.IsNullOrWhiteSpace(caption.Text))
+
+            if (
+                string.IsNullOrWhiteSpace(
+                    caption.Text
+                )
+            )
+            {
                 return;
+            }
 
 
             caption.Text =
-                Normalize(caption.Text);
+                Normalize(
+                    caption.Text
+                );
 
 
-            if (string.IsNullOrWhiteSpace(caption.Text))
+            if (
+                string.IsNullOrWhiteSpace(
+                    caption.Text
+                )
+            )
+            {
                 return;
+            }
 
 
             bool changed =
@@ -68,50 +105,13 @@ namespace PrivateBrowser
 
             lock (_lock)
             {
-                // =====================================================
-                // MEETING CHANGE
-                // =====================================================
-
-                if (
-                    !string.IsNullOrWhiteSpace(
-                        caption.MeetingKey
-                    )
-                )
-                {
-                    if (
-                        !string.IsNullOrWhiteSpace(
-                            _currentMeetingKey
-                        )
-                        &&
-                        !string.Equals(
-                            _currentMeetingKey,
-                            caption.MeetingKey,
-                            StringComparison.OrdinalIgnoreCase
-                        )
-                    )
-                    {
-                        _history.Clear();
-
-                        _latest =
-                            null;
-
-                        changed =
-                            true;
-                    }
-
-
-                    _currentMeetingKey =
-                        caption.MeetingKey;
-                }
-
-
-                // =====================================================
-                // UPDATE EXISTING SEGMENT
-                // =====================================================
-
                 CaptionItem? existing =
                     null;
 
+
+                // =================================================
+                // UPDATE EXISTING SEGMENT
+                // =================================================
 
                 if (
                     !string.IsNullOrWhiteSpace(
@@ -127,20 +127,11 @@ namespace PrivateBrowser
                                     caption.SegmentId,
                                     StringComparison.Ordinal
                                 )
-                                &&
-                                string.Equals(
-                                    item.MeetingKey,
-                                    caption.MeetingKey,
-                                    StringComparison.OrdinalIgnoreCase
-                                )
                         );
                 }
 
 
-                if (
-                    existing !=
-                    null
-                )
+                if (existing != null)
                 {
                     bool textChanged =
                         !string.Equals(
@@ -149,11 +140,12 @@ namespace PrivateBrowser
                             StringComparison.Ordinal
                         );
 
+
                     bool speakerChanged =
                         !string.Equals(
                             existing.Speaker,
                             caption.Speaker,
-                            StringComparison.Ordinal
+                            StringComparison.OrdinalIgnoreCase
                         );
 
 
@@ -202,13 +194,11 @@ namespace PrivateBrowser
                         string.Equals(
                             previous.Speaker,
                             caption.Speaker,
-                            StringComparison.Ordinal
+                            StringComparison.OrdinalIgnoreCase
                         );
 
 
-                    if (
-                        duplicate
-                    )
+                    if (duplicate)
                     {
                         _latest =
                             previous;
@@ -219,39 +209,202 @@ namespace PrivateBrowser
                             caption
                         );
 
+
                         _latest =
                             caption;
+
 
                         changed =
                             true;
 
 
-                        if (
-                            _history.Count >
-                            5000
-                        )
-                        {
-                            _history.RemoveRange(
-                                0,
-                                _history.Count - 5000
-                            );
-                        }
+                        TrimHistoryIfNeeded();
                     }
                 }
             }
 
 
-            // IMPORTANT:
-            // Invoke outside _lock.
-
-            if (
-                changed
-            )
+            if (changed)
             {
                 Changed?.Invoke();
             }
         }
 
+
+        // =========================================================
+        // APPEND STREAMING TEXT
+        // =========================================================
+        //
+        // This is the method to use for local Whisper streaming.
+        //
+        // Same speaker:
+        //     append to the latest paragraph.
+        //
+        // Different speaker:
+        //     create a new paragraph.
+        // =========================================================
+
+        public void Append(
+            string speaker,
+            string text
+        )
+        {
+            if (
+                string.IsNullOrWhiteSpace(
+                    text
+                )
+            )
+            {
+                return;
+            }
+
+
+            speaker =
+                NormalizeSpeaker(
+                    speaker
+                );
+
+
+            text =
+                Normalize(
+                    text
+                );
+
+
+            if (
+                string.IsNullOrWhiteSpace(
+                    text
+                )
+            )
+            {
+                return;
+            }
+
+
+            bool changed =
+                false;
+
+
+            lock (_lock)
+            {
+                CaptionItem? previous =
+                    _history.LastOrDefault();
+
+
+                // =================================================
+                // SAME SPEAKER
+                // =================================================
+
+                if (
+                    previous != null
+                    &&
+                    string.Equals(
+                        NormalizeSpeaker(
+                            previous.Speaker
+                        ),
+                        speaker,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
+                {
+                    string newPortion =
+                        RemoveDuplicateBoundaryText(
+                            previous.Text,
+                            text
+                        );
+
+
+                    if (
+                        string.IsNullOrWhiteSpace(
+                            newPortion
+                        )
+                    )
+                    {
+                        _latest =
+                            previous;
+
+                        return;
+                    }
+
+
+                    previous.Text =
+                        Normalize(
+                            previous.Text +
+                            " " +
+                            newPortion
+                        );
+
+
+                    previous.Timestamp =
+                        DateTime.Now.ToString(
+                            "HH:mm:ss"
+                        );
+
+
+                    _latest =
+                        previous;
+
+
+                    changed =
+                        true;
+                }
+                else
+                {
+                    // =================================================
+                    // DIFFERENT SPEAKER / FIRST CAPTION
+                    // =================================================
+
+                    CaptionItem caption =
+                        new CaptionItem
+                        {
+                            Speaker =
+                                speaker,
+
+                            Text =
+                                text,
+
+                            Timestamp =
+                                DateTime.Now.ToString(
+                                    "HH:mm:ss"
+                                ),
+
+                            MeetingKey =
+                                null,
+
+                            SegmentId =
+                                Guid.NewGuid()
+                                    .ToString("N")
+                        };
+
+
+                    _history.Add(
+                        caption
+                    );
+
+
+                    _latest =
+                        caption;
+
+
+                    changed =
+                        true;
+
+
+                    TrimHistoryIfNeeded();
+                }
+            }
+
+
+            if (changed)
+            {
+                Changed?.Invoke();
+            }
+        }
+
+
+        // =========================================================
+        // LATEST TEXT
+        // =========================================================
 
         public string GetLatestText()
         {
@@ -263,11 +416,15 @@ namespace PrivateBrowser
         }
 
 
+        // =========================================================
+        // FULL TRANSCRIPT
+        // =========================================================
+
         public string GetTranscript()
         {
             lock (_lock)
             {
-                var builder =
+                StringBuilder builder =
                     new StringBuilder();
 
 
@@ -276,8 +433,12 @@ namespace PrivateBrowser
                     in _history
                 )
                 {
-                    if (builder.Length > 0)
+                    if (
+                        builder.Length >
+                        0
+                    )
                     {
+                        builder.AppendLine();
                         builder.AppendLine();
                     }
 
@@ -292,7 +453,7 @@ namespace PrivateBrowser
                             item.Speaker
                         );
 
-                        builder.Append(": ");
+                        builder.AppendLine();
                     }
 
 
@@ -307,6 +468,10 @@ namespace PrivateBrowser
         }
 
 
+        // =========================================================
+        // CLEAR CURRENT SESSION
+        // =========================================================
+
         public void Clear()
         {
             bool changed;
@@ -316,33 +481,299 @@ namespace PrivateBrowser
             {
                 changed =
                     _history.Count > 0 ||
-                    _latest != null ||
-                    _currentMeetingKey != null;
+                    _latest != null;
 
 
                 _history.Clear();
 
                 _latest =
                     null;
-
-                _currentMeetingKey =
-                    null;
             }
 
 
-            if (
-                changed
-            )
+            if (changed)
             {
                 Changed?.Invoke();
             }
         }
 
 
+        // =========================================================
+        // REMOVE DUPLICATED CHUNK BOUNDARY
+        // =========================================================
+        //
+        // Example:
+        //
+        // Previous:
+        // "We are living in Australia."
+        //
+        // Incoming:
+        // "Australia. We are doing freelancing."
+        //
+        // Result:
+        // "We are doing freelancing."
+        // =========================================================
+
+        private static string RemoveDuplicateBoundaryText(
+            string existing,
+            string incoming
+        )
+        {
+            existing =
+                Normalize(
+                    existing
+                );
+
+            incoming =
+                Normalize(
+                    incoming
+                );
+
+
+            if (
+                string.IsNullOrWhiteSpace(
+                    existing
+                )
+            )
+            {
+                return incoming;
+            }
+
+
+            if (
+                string.IsNullOrWhiteSpace(
+                    incoming
+                )
+            )
+            {
+                return string.Empty;
+            }
+
+
+            if (
+                string.Equals(
+                    existing,
+                    incoming,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+            {
+                return string.Empty;
+            }
+
+
+            if (
+                existing.EndsWith(
+                    incoming,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+            {
+                return string.Empty;
+            }
+
+
+            string[] existingWords =
+                existing.Split(
+                    ' ',
+                    StringSplitOptions.RemoveEmptyEntries
+                );
+
+
+            string[] incomingWords =
+                incoming.Split(
+                    ' ',
+                    StringSplitOptions.RemoveEmptyEntries
+                );
+
+
+            int maximumOverlap =
+                Math.Min(
+                    existingWords.Length,
+                    incomingWords.Length
+                );
+
+
+            // Limit overlap checking so this stays lightweight.
+            maximumOverlap =
+                Math.Min(
+                    maximumOverlap,
+                    20
+                );
+
+
+            for (
+                int overlap = maximumOverlap;
+                overlap >= 1;
+                overlap--
+            )
+            {
+                bool matches =
+                    true;
+
+
+                for (
+                    int i = 0;
+                    i < overlap;
+                    i++
+                )
+                {
+                    string oldWord =
+                        NormalizeComparisonWord(
+                            existingWords[
+                                existingWords.Length -
+                                overlap +
+                                i
+                            ]
+                        );
+
+
+                    string newWord =
+                        NormalizeComparisonWord(
+                            incomingWords[i]
+                        );
+
+
+                    if (
+                        !string.Equals(
+                            oldWord,
+                            newWord,
+                            StringComparison.OrdinalIgnoreCase
+                        )
+                    )
+                    {
+                        matches =
+                            false;
+
+                        break;
+                    }
+                }
+
+
+                if (matches)
+                {
+                    if (
+                        overlap >=
+                        incomingWords.Length
+                    )
+                    {
+                        return string.Empty;
+                    }
+
+
+                    return string.Join(
+                        " ",
+                        incomingWords.Skip(
+                            overlap
+                        )
+                    );
+                }
+            }
+
+
+            return incoming;
+        }
+
+
+        // =========================================================
+        // NORMALIZE COMPARISON WORD
+        // =========================================================
+
+        private static string NormalizeComparisonWord(
+            string word
+        )
+        {
+            if (
+                string.IsNullOrWhiteSpace(
+                    word
+                )
+            )
+            {
+                return string.Empty;
+            }
+
+
+            return word
+                .Trim()
+                .Trim(
+                    '.',
+                    ',',
+                    '!',
+                    '?',
+                    ':',
+                    ';',
+                    '"',
+                    '\'',
+                    '(',
+                    ')',
+                    '[',
+                    ']'
+                );
+        }
+
+
+        // =========================================================
+        // NORMALIZE SPEAKER
+        // =========================================================
+
+        private static string NormalizeSpeaker(
+            string? speaker
+        )
+        {
+            if (
+                string.IsNullOrWhiteSpace(
+                    speaker
+                )
+            )
+            {
+                return "Interviwer";
+            }
+
+
+            return speaker.Trim();
+        }
+
+
+        // =========================================================
+        // LIMIT MEMORY USAGE
+        // =========================================================
+
+        private void TrimHistoryIfNeeded()
+        {
+            if (
+                _history.Count <=
+                5000
+            )
+            {
+                return;
+            }
+
+
+            _history.RemoveRange(
+                0,
+                _history.Count - 5000
+            );
+        }
+
+
+        // =========================================================
+        // NORMALIZE WHITESPACE
+        // =========================================================
+
         private static string Normalize(
             string text
         )
         {
+            if (
+                string.IsNullOrWhiteSpace(
+                    text
+                )
+            )
+            {
+                return string.Empty;
+            }
+
+
             return string.Join(
                 " ",
                 text.Split(
@@ -353,7 +784,8 @@ namespace PrivateBrowser
                         '\n',
                         '\t'
                     },
-                    StringSplitOptions.RemoveEmptyEntries
+                    StringSplitOptions
+                        .RemoveEmptyEntries
                 )
             ).Trim();
         }

@@ -11,8 +11,7 @@
         MinWidth="900"
         MinHeight="600"
         Topmost="True"
-        ShowInTaskbar="False"
-        >
+        ShowInTaskbar="False">
 
     <Grid>
 
@@ -133,7 +132,7 @@
             x:Name="MainContentGrid">
 
             <Grid.ColumnDefinitions>
-                 <!-- Browser -->
+                <!-- Browser -->
                 <ColumnDefinition
                     x:Name="BrowserColumn"
                     Width="*"
@@ -265,110 +264,6 @@
 
 
                     <!-- ========================================= -->
-                    <!-- HEADER -->
-                    <!-- ========================================= -->
-
-                    <Grid
-                        Grid.Row="0"
-                        Margin="0,0,0,12">
-
-                        <Grid.RowDefinitions>
-
-                            <RowDefinition Height="Auto"/>
-
-                            <RowDefinition Height="Auto"/>
-
-                        </Grid.RowDefinitions>
-
-
-                        <Grid>
-
-                            <Grid.ColumnDefinitions>
-
-                                <ColumnDefinition Width="*"/>
-
-                                <ColumnDefinition Width="Auto"/>
-
-                            </Grid.ColumnDefinitions>
-
-
-                            <TextBlock
-                                Grid.Column="0"
-                                Text="Live Meeting Captions"
-                                FontSize="16"
-                                FontWeight="SemiBold"
-                                VerticalAlignment="Center"/>
-
-
-                            <Border
-                                Grid.Column="1"
-                                Background="#FFEAEAEA"
-                                CornerRadius="10"
-                                Padding="8,3">
-
-                                <TextBlock
-                                    x:Name="CaptionCountText"
-                                    Text="0 segments"
-                                    FontSize="11"
-                                    Foreground="#666666"/>
-
-                            </Border>
-                        </Grid>
-
-
-                        <TextBlock
-                            Grid.Row="1"
-                            x:Name="MeetingKeyText"
-                            Text="No meeting"
-                            Margin="0,5,0,0"
-                            FontSize="12"
-                            Foreground="#777777"
-                            TextTrimming="CharacterEllipsis"/>
-
-                    </Grid>
-
-
-                    <!-- ========================================= -->
-                    <!-- LATEST CAPTION -->
-                    <!-- ========================================= -->
-
-                    <Border
-                        Grid.Row="1"
-                        Background="White"
-                        BorderBrush="#FFE1E1E1"
-                        BorderThickness="1"
-                        CornerRadius="7"
-                        Padding="12"
-                        Margin="0,0,0,14">
-
-                        <StackPanel>
-
-                            <TextBlock
-                                Text="Latest"
-                                FontSize="11"
-                                Foreground="#888888"
-                                Margin="0,0,0,7"/>
-
-
-                            <TextBlock
-                                x:Name="LatestSpeakerText"
-                                Text="Waiting for captions..."
-                                FontWeight="SemiBold"
-                                Margin="0,0,0,5"/>
-
-
-                            <TextBlock
-                                x:Name="LatestCaptionText"
-                                Text="Google Meet captions will appear here."
-                                TextWrapping="Wrap"
-                                Foreground="#333333"/>
-
-                        </StackPanel>
-
-                    </Border>
-
-
-                    <!-- ========================================= -->
                     <!-- TRANSCRIPT HEADER -->
                     <!-- ========================================= -->
 
@@ -408,35 +303,25 @@
 
                     <Border
                         Grid.Row="3"
-                        Background="White"
-                        BorderBrush="#FFE1E1E1"
+                        Margin="0,8,0,8"
+                        BorderBrush="#DDDDDD"
                         BorderThickness="1"
-                        CornerRadius="7"
-                        Margin="0,0,0,12">
+                        Background="White">
 
                         <RichTextBox
                             x:Name="TranscriptText"
-                            IsReadOnly="True"
-                            IsReadOnlyCaretVisible="True"
-                            VerticalScrollBarVisibility="Auto"
-                            HorizontalScrollBarVisibility="Disabled"
+                            Padding="8"
                             BorderThickness="0"
-                            Background="Transparent"
-                            Padding="12"
-                            FontSize="14">
+                            IsReadOnly="True"
+                            VerticalAlignment="Stretch"
+                            HorizontalAlignment="Stretch"
+                            VerticalScrollBarVisibility="Auto"
+                            HorizontalScrollBarVisibility="Disabled">
 
                             <FlowDocument
                                 x:Name="TranscriptDocument"
                                 PagePadding="0"
-                                FontFamily="Segoe UI">
-
-                                <Paragraph
-                                    Foreground="#777777"
-                                    Margin="0">
-                                    Waiting for meeting captions...
-                                </Paragraph>
-
-                            </FlowDocument>
+                                ColumnWidth="100000"/>
 
                         </RichTextBox>
 
