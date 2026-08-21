@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="PrivateBrowser.LicenseAdmin/PrivateBrowser.LicenseAdmin.csproj" />
+  <Project Path="PrivateBrowser/PrivateBrowser.csproj" />
+</Solution>
