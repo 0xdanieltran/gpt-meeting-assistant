@@ -7,8 +7,9 @@ using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Interop;
+using System.Text;
 using System.Text.Json;
 
 using Forms = System.Windows.Forms;
@@ -24,6 +25,10 @@ using WpfMessageBox = System.Windows.MessageBox;
 using WpfMessageBoxButton = System.Windows.MessageBoxButton;
 using WpfMessageBoxImage = System.Windows.MessageBoxImage;
 using WpfKey = System.Windows.Input.Key;
+using WpfButton = System.Windows.Controls.Button;
+using WpfCursors = System.Windows.Input.Cursors;
+using WpfHorizontalAlignment = System.Windows.HorizontalAlignment;
+using WpfVerticalAlignment = System.Windows.VerticalAlignment;
 
 namespace PrivateBrowser
 {
@@ -56,6 +61,38 @@ namespace PrivateBrowser
 
         private bool _savedPositionValid = false;
 
+
+        private const int RecentTranscriptBlockCount = 3;
+
+        private static readonly WpfSolidColorBrush TranscriptItemBackground =
+            new WpfSolidColorBrush(
+                WpfColor.FromRgb(255, 255, 255)
+            );
+
+        private static readonly WpfSolidColorBrush TranscriptItemHoverBackground =
+            new WpfSolidColorBrush(
+                WpfColor.FromRgb(232, 242, 255)
+            );
+
+        private static readonly WpfSolidColorBrush TranscriptItemBorderBrush =
+            new WpfSolidColorBrush(
+                WpfColor.FromRgb(230, 230, 230)
+            );
+
+        private static readonly WpfSolidColorBrush TranscriptItemHoverBorderBrush =
+            new WpfSolidColorBrush(
+                WpfColor.FromRgb(170, 200, 235)
+            );
+
+        private static readonly WpfSolidColorBrush TranscriptMutedForeground =
+            new WpfSolidColorBrush(
+                WpfColor.FromRgb(120, 120, 120)
+            );
+
+        private static readonly WpfSolidColorBrush TranscriptBodyForeground =
+            new WpfSolidColorBrush(
+                WpfColor.FromRgb(38, 38, 38)
+            );
 
         private readonly WpfBrush[] _speakerPalette =
         {
@@ -127,175 +164,485 @@ namespace PrivateBrowser
             IReadOnlyList<CaptionItem> history
         )
         {
-            TranscriptDocument.Blocks.Clear();
+            history ??=
+                Array.Empty<CaptionItem>();
 
 
-            // =========================================================
-            // CURRENT IN-MEMORY CAPTION HISTORY
-            // =========================================================
+            bool showingEmptyPlaceholder =
+                TranscriptList.Children.Count == 1
+                &&
+                TranscriptList.Children[0] is TextBlock;
 
-            if (history != null)
+
+            if (history.Count == 0)
             {
-                foreach (
-                    CaptionItem item
-                    in history
+                if (!showingEmptyPlaceholder)
+                {
+                    TranscriptList.Children.Clear();
+
+
+                    TranscriptList.Children.Add(
+                        CreateEmptyTranscriptPlaceholder()
+                    );
+                }
+
+
+                return;
+            }
+
+
+            if (showingEmptyPlaceholder)
+            {
+                TranscriptList.Children.Clear();
+            }
+
+
+            while (
+                TranscriptList.Children.Count >
+                history.Count
+            )
+            {
+                TranscriptList.Children.RemoveAt(
+                    TranscriptList.Children.Count - 1
+                );
+            }
+
+
+            for (
+                int i = 0;
+                i < history.Count;
+                i++
+            )
+            {
+                CaptionItem item =
+                    history[i];
+
+
+                if (
+                    i < TranscriptList.Children.Count
+                    &&
+                    TranscriptList.Children[i] is Border existing
+                    &&
+                    ReferenceEquals(
+                        existing.Tag,
+                        item
+                    )
                 )
                 {
-                    string speaker =
-                        string.IsNullOrWhiteSpace(
-                            item.Speaker
-                        )
-                            ? "Interviewer"
-                            : item.Speaker;
+                    UpdateTranscriptItem(
+                        existing,
+                        item
+                    );
+
+                    continue;
+                }
 
 
-                    Paragraph paragraph =
-                        CreateTranscriptParagraph(
-                            speaker,
-                            item.Text
-                        );
+                UIElement created =
+                    CreateTranscriptItem(
+                        item
+                    );
 
 
-                    TranscriptDocument.Blocks.Add(
-                        paragraph
+                if (
+                    i < TranscriptList.Children.Count
+                )
+                {
+                    TranscriptList.Children.RemoveAt(
+                        i
+                    );
+
+                    TranscriptList.Children.Insert(
+                        i,
+                        created
+                    );
+                }
+                else
+                {
+                    TranscriptList.Children.Add(
+                        created
                     );
                 }
             }
 
 
-            // =========================================================
-            // NOTHING YET
-            // =========================================================
-
-            if (
-                TranscriptDocument.Blocks.Count ==
-                0
-            )
-            {
-                Paragraph empty =
-                    new Paragraph(
-                        new Run(
-                            "Waiting for live captions..."
-                        )
-                    );
-
-
-                empty.Foreground =
-                    new WpfSolidColorBrush(
-                        WpfColor.FromRgb(
-                            120,
-                            120,
-                            120
-                        )
-                    );
-
-
-                empty.Margin =
-                    new Thickness(
-                        0
-                    );
-
-
-                TranscriptDocument.Blocks.Add(
-                    empty
-                );
-            }
-
-
-            TranscriptText.ScrollToEnd();
+            TranscriptScroller.ScrollToEnd();
         }
 
 
-        private Paragraph CreateTranscriptParagraph(
-            string speaker,
-            string text
+        private TextBlock CreateEmptyTranscriptPlaceholder()
+        {
+            return new TextBlock
+            {
+                Text =
+                    "Waiting for live captions...",
+                Foreground =
+                    TranscriptMutedForeground,
+                TextWrapping =
+                    TextWrapping.Wrap,
+                Margin =
+                    new Thickness(
+                        4
+                    )
+            };
+        }
+
+
+        private void UpdateTranscriptItem(
+            Border border,
+            CaptionItem item
         )
         {
-            Paragraph paragraph =
-                new Paragraph();
+            string speaker =
+                string.IsNullOrWhiteSpace(
+                    item.Speaker
+                )
+                    ? "Interviewer"
+                    : item.Speaker;
 
 
-            paragraph.Margin =
-                new Thickness(
-                    0,
-                    0,
-                    0,
-                    14
-                );
+            if (
+                border.Child is not Grid grid
+            )
+            {
+                return;
+            }
 
 
-            paragraph.LineHeight =
-                21;
-
-
-            // =========================================================
-            // SPEAKER
-            // =========================================================
-
-            Run speakerRun =
-                new Run(
-                    speaker
-                );
-
-
-            speakerRun.FontWeight =
-                FontWeights.Bold;
-
-
-            speakerRun.FontSize =
-                13;
-
-
-            speakerRun.Foreground =
-                GetSpeakerBrush(
-                    speaker
-                );
-
-
-            paragraph.Inlines.Add(
-                speakerRun
-            );
-
-
-            paragraph.Inlines.Add(
-                new LineBreak()
-            );
-
-
-            // =========================================================
-            // TEXT
-            // =========================================================
-
-            Run captionRun =
-                new Run(
-                    text
-                );
-
-
-            captionRun.FontWeight =
-                FontWeights.Normal;
-
-
-            captionRun.FontSize =
-                14;
-
-
-            captionRun.Foreground =
-                new WpfSolidColorBrush(
-                    WpfColor.FromRgb(
-                        38,
-                        38,
-                        38
+            foreach (
+                UIElement child
+                in grid.Children
+            )
+            {
+                if (
+                    child is StackPanel panel
+                    &&
+                    panel.Children.Count >= 2
+                )
+                {
+                    if (
+                        panel.Children[0] is TextBlock speakerBlock
                     )
-                );
+                    {
+                        speakerBlock.Text =
+                            speaker;
+
+                        speakerBlock.Foreground =
+                            GetSpeakerBrush(
+                                speaker
+                            );
+                    }
 
 
-            paragraph.Inlines.Add(
-                captionRun
+                    if (
+                        panel.Children[1] is TextBlock textBlock
+                    )
+                    {
+                        textBlock.Text =
+                            item.Text;
+                    }
+                }
+
+
+                if (
+                    child is WpfButton sendButton
+                )
+                {
+                    sendButton.Tag =
+                        item;
+                }
+            }
+
+
+            border.Tag =
+                item;
+        }
+
+
+        private UIElement CreateTranscriptItem(
+            CaptionItem item
+        )
+        {
+            string speaker =
+                string.IsNullOrWhiteSpace(
+                    item.Speaker
+                )
+                    ? "Interviewer"
+                    : item.Speaker;
+
+
+            Border border =
+                new Border
+                {
+                    Background =
+                        TranscriptItemBackground,
+                    BorderBrush =
+                        TranscriptItemBorderBrush,
+                    BorderThickness =
+                        new Thickness(
+                            1
+                        ),
+                    CornerRadius =
+                        new CornerRadius(
+                            6
+                        ),
+                    Padding =
+                        new Thickness(
+                            8
+                        ),
+                    Margin =
+                        new Thickness(
+                            0,
+                            0,
+                            0,
+                            8
+                        ),
+                    Tag =
+                        item
+                };
+
+
+            Grid grid =
+                new Grid();
+
+
+            StackPanel content =
+                new StackPanel
+                {
+                    Margin =
+                        new Thickness(
+                            0,
+                            0,
+                            58,
+                            0
+                        )
+                };
+
+
+            TextBlock speakerBlock =
+                new TextBlock
+                {
+                    Text =
+                        speaker,
+                    FontWeight =
+                        FontWeights.Bold,
+                    FontSize =
+                        13,
+                    Foreground =
+                        GetSpeakerBrush(
+                            speaker
+                        ),
+                    TextWrapping =
+                        TextWrapping.Wrap
+                };
+
+
+            TextBlock textBlock =
+                new TextBlock
+                {
+                    Text =
+                        item.Text,
+                    FontWeight =
+                        FontWeights.Normal,
+                    FontSize =
+                        14,
+                    Foreground =
+                        TranscriptBodyForeground,
+                    TextWrapping =
+                        TextWrapping.Wrap,
+                    Margin =
+                        new Thickness(
+                            0,
+                            4,
+                            0,
+                            0
+                        )
+                };
+
+
+            content.Children.Add(
+                speakerBlock
+            );
+
+            content.Children.Add(
+                textBlock
             );
 
 
-            return paragraph;
+            WpfButton sendButton =
+                new WpfButton
+                {
+                    Content =
+                        "Send",
+                    Width =
+                        52,
+                    Height =
+                        24,
+                    FontSize =
+                        11,
+                    Padding =
+                        new Thickness(
+                            0
+                        ),
+                    HorizontalAlignment =
+                        WpfHorizontalAlignment.Right,
+                    VerticalAlignment =
+                        WpfVerticalAlignment.Top,
+                    Opacity =
+                        0,
+                    IsHitTestVisible =
+                        false,
+                    Cursor =
+                        WpfCursors.Hand,
+                    ToolTip =
+                        "Copy this caption and send it to ChatGPT",
+                    Tag =
+                        item
+                };
+
+
+            sendButton.Click +=
+                TranscriptSendButton_Click;
+
+
+            grid.Children.Add(
+                content
+            );
+
+            grid.Children.Add(
+                sendButton
+            );
+
+
+            border.Child =
+                grid;
+
+
+            border.MouseEnter +=
+                (sender, e) =>
+                {
+                    border.Background =
+                        TranscriptItemHoverBackground;
+
+                    border.BorderBrush =
+                        TranscriptItemHoverBorderBrush;
+
+                    sendButton.Opacity =
+                        1;
+
+                    sendButton.IsHitTestVisible =
+                        true;
+                };
+
+
+            border.MouseLeave +=
+                (sender, e) =>
+                {
+                    border.Background =
+                        TranscriptItemBackground;
+
+                    border.BorderBrush =
+                        TranscriptItemBorderBrush;
+
+                    sendButton.Opacity =
+                        0;
+
+                    sendButton.IsHitTestVisible =
+                        false;
+                };
+
+
+            return border;
+        }
+
+
+        private static string FormatCaptionLine(
+            CaptionItem item
+        )
+        {
+            if (
+                item == null ||
+                string.IsNullOrWhiteSpace(
+                    item.Text
+                )
+            )
+            {
+                return string.Empty;
+            }
+
+
+            return string.IsNullOrWhiteSpace(
+                item.Speaker
+            )
+                ? item.Text
+                : $"{item.Speaker}: {item.Text}";
+        }
+
+
+        private static string BuildInterviewAssistPrompt(
+            string transcript
+        )
+        {
+            StringBuilder builder =
+                new StringBuilder();
+
+
+            builder.AppendLine(
+                "You are assisting a candidate during a live interview."
+            );
+
+            builder.AppendLine();
+
+            builder.AppendLine(
+                "The excerpts below are the most recent spoken blocks from the conversation. Use them as context, then answer the interviewer's latest question as the candidate would in the interview."
+            );
+
+            builder.AppendLine();
+
+            builder.AppendLine(
+                "Instructions:"
+            );
+
+            builder.AppendLine(
+                "1. Identify the interviewer's most recent question from the transcript."
+            );
+
+            builder.AppendLine(
+                "2. Provide a clear, concise, interview-ready spoken answer to that question."
+            );
+
+            builder.AppendLine(
+                "3. Use earlier excerpts only as supporting context."
+            );
+
+            builder.AppendLine(
+                "4. Do not recap or quote the transcript unless a short reference is necessary."
+            );
+
+            builder.AppendLine(
+                "5. If the last block is from Me (the candidate), ignore it. Answer the interviewer's most recent question from the remaining transcript."
+            );
+
+            builder.AppendLine();
+
+            builder.AppendLine(
+                "Transcript:"
+            );
+
+            builder.AppendLine(
+                "-----"
+            );
+
+            builder.AppendLine(
+                transcript.Trim()
+            );
+
+            builder.Append(
+                "-----"
+            );
+
+
+            return builder.ToString();
         }
 
         // =========================================================
@@ -2510,11 +2857,20 @@ namespace PrivateBrowser
                 );
 
 
+                CoreWebView2EnvironmentOptions environmentOptions =
+                    new CoreWebView2EnvironmentOptions
+                    {
+                        AreBrowserExtensionsEnabled =
+                            true
+                    };
+
+
                 CoreWebView2Environment environment =
                     await CoreWebView2Environment
                         .CreateAsync(
                             null,
-                            profilePath
+                            profilePath,
+                            environmentOptions
                         );
 
 
@@ -2522,6 +2878,10 @@ namespace PrivateBrowser
                     .EnsureCoreWebView2Async(
                         environment
                     );
+
+                Browser.CoreWebView2.Profile
+                    .PreferredTrackingPreventionLevel =
+                    CoreWebView2TrackingPreventionLevel.None;
 
 
                 // =====================================================
@@ -2687,6 +3047,16 @@ namespace PrivateBrowser
                     "https://",
                     StringComparison.OrdinalIgnoreCase
                 )
+                &&
+                !address.StartsWith(
+                    "chrome-extension://",
+                    StringComparison.OrdinalIgnoreCase
+                )
+                &&
+                !address.StartsWith(
+                    "file://",
+                    StringComparison.OrdinalIgnoreCase
+                )
             )
             {
                 address =
@@ -2739,6 +3109,44 @@ namespace PrivateBrowser
             Navigate(
                 AddressBar.Text
             );
+        }
+
+
+        private void ExtensionsButton_Click(
+            object sender,
+            RoutedEventArgs e
+        )
+        {
+            if (
+                Browser.CoreWebView2 == null
+            )
+            {
+                WpfMessageBox.Show(
+                    "The browser is still starting. Try again in a moment.",
+                    "PrivateBrowser",
+                    WpfMessageBoxButton.OK,
+                    WpfMessageBoxImage.Information
+                );
+
+                return;
+            }
+
+            ExtensionsWindow window =
+                new ExtensionsWindow(
+                    Browser.CoreWebView2,
+                    url =>
+                    {
+                        Browser.CoreWebView2?.Navigate(
+                            url
+                        );
+                    }
+                )
+                {
+                    Owner =
+                        this
+                };
+
+            window.ShowDialog();
         }
 
 
@@ -3053,11 +3461,9 @@ namespace PrivateBrowser
 
 
                 string latest =
-                    string.IsNullOrWhiteSpace(
-                        latestItem.Speaker
-                    )
-                        ? latestItem.Text
-                        : $"{latestItem.Speaker}: {latestItem.Text}";
+                    FormatCaptionLine(
+                        latestItem
+                    );
 
 
                 if (
@@ -3141,13 +3547,15 @@ namespace PrivateBrowser
         {
             try
             {
-                CaptionItem? latestItem =
-                    _captionStore.GetLatest();
+                string recentTranscript =
+                    _captionStore.GetRecentTranscript(
+                        RecentTranscriptBlockCount
+                    );
 
-                if (latestItem == null)
+                if (string.IsNullOrWhiteSpace(recentTranscript))
                 {
                     WpfMessageBox.Show(
-                        "There is no latest caption to send.",
+                        "There is no recent transcript to send.",
                         "PrivateBrowser",
                         WpfMessageBoxButton.OK,
                         WpfMessageBoxImage.Information
@@ -3157,23 +3565,9 @@ namespace PrivateBrowser
                 }
 
                 string text =
-                    string.IsNullOrWhiteSpace(
-                        latestItem.Speaker
-                    )
-                        ? latestItem.Text
-                        : $"{latestItem.Speaker}: {latestItem.Text}";
-
-                if (string.IsNullOrWhiteSpace(text))
-                {
-                    WpfMessageBox.Show(
-                        "The latest caption is empty.",
-                        "PrivateBrowser",
-                        WpfMessageBoxButton.OK,
-                        WpfMessageBoxImage.Information
+                    BuildInterviewAssistPrompt(
+                        recentTranscript
                     );
-
-                    return;
-                }
 
                 bool copied =
                     await TrySetClipboardTextAsync(
@@ -3183,7 +3577,7 @@ namespace PrivateBrowser
                 if (!copied)
                 {
                     WpfMessageBox.Show(
-                        "Could not copy the latest caption.",
+                        "Could not copy the recent transcript.",
                         "PrivateBrowser",
                         WpfMessageBoxButton.OK,
                         WpfMessageBoxImage.Warning
@@ -3200,6 +3594,66 @@ namespace PrivateBrowser
             {
                 WpfMessageBox.Show(
                     $"Ctrl + Shift + S failed:\n\n{ex.Message}",
+                    "PrivateBrowser",
+                    WpfMessageBoxButton.OK,
+                    WpfMessageBoxImage.Error
+                );
+            }
+        }
+
+
+        private async void TranscriptSendButton_Click(
+            object sender,
+            RoutedEventArgs e
+        )
+        {
+            e.Handled = true;
+
+            if (
+                sender is not WpfButton button ||
+                button.Tag is not CaptionItem item
+            )
+            {
+                return;
+            }
+
+            string text =
+                FormatCaptionLine(
+                    item
+                );
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return;
+            }
+
+            try
+            {
+                bool copied =
+                    await TrySetClipboardTextAsync(
+                        text
+                    );
+
+                if (!copied)
+                {
+                    WpfMessageBox.Show(
+                        "Could not copy this caption.",
+                        "PrivateBrowser",
+                        WpfMessageBoxButton.OK,
+                        WpfMessageBoxImage.Warning
+                    );
+
+                    return;
+                }
+
+                await PasteIntoChatGptAndSendAsync(
+                    text
+                );
+            }
+            catch (Exception ex)
+            {
+                WpfMessageBox.Show(
+                    $"Send to ChatGPT failed:\n\n{ex.Message}",
                     "PrivateBrowser",
                     WpfMessageBoxButton.OK,
                     WpfMessageBoxImage.Error
@@ -3580,7 +4034,10 @@ namespace PrivateBrowser
                 return;
             }
 
-            // Safely encode C# text for JavaScript.
+            Activate();
+            Browser.Focus();
+            await Task.Delay(80);
+
             string encodedText =
                 System.Text.Json.JsonSerializer.Serialize(
                     text
@@ -3588,159 +4045,275 @@ namespace PrivateBrowser
 
             string script =
                 $$"""
-                (() => {
+                (async () => {
                     const text = {{encodedText}};
 
-                    // ---------------------------------------------
-                    // FIND CHATGPT INPUT
-                    // ---------------------------------------------
+                    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-                    const input =
-                        document.querySelector(
-                            '#prompt-textarea'
-                        ) ||
-                        document.querySelector(
+                    const isVisible = (el) => {
+                        if (!el) {
+                            return false;
+                        }
+
+                        const style = window.getComputedStyle(el);
+                        if (
+                            style.display === 'none' ||
+                            style.visibility === 'hidden' ||
+                            style.opacity === '0'
+                        ) {
+                            return false;
+                        }
+
+                        const rect = el.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    };
+
+                    const normalize = (value) =>
+                        (value || '').replace(/\s+/g, ' ').trim();
+
+                    const composerHasText = (el, expected) => {
+                        const current = normalize(el.innerText || el.value || '');
+                        const target = normalize(expected);
+                        if (!current || !target) {
+                            return false;
+                        }
+
+                        const sample = target.slice(0, Math.min(48, target.length));
+                        return current.includes(sample);
+                    };
+
+                    const findComposer = () => {
+                        const prompt = document.querySelector('#prompt-textarea');
+                        if (prompt) {
+                            if (prompt.isContentEditable || prompt instanceof HTMLTextAreaElement) {
+                                if (isVisible(prompt)) {
+                                    return prompt;
+                                }
+                            }
+
+                            const nested = prompt.querySelector('[contenteditable="true"], textarea');
+                            if (isVisible(nested)) {
+                                return nested;
+                            }
+                        }
+
+                        const selectors = [
+                            '[data-testid="prompt-textarea"]',
+                            'div.ProseMirror[contenteditable="true"]',
+                            'div[contenteditable="true"][id*="prompt"]',
+                            'form textarea',
+                            'textarea',
                             'div[contenteditable="true"]'
-                        ) ||
-                        document.querySelector(
-                            'textarea'
-                        );
+                        ];
 
-                    if (!input) {
-                        return JSON.stringify({
-                            success: false,
-                            reason: 'input-not-found'
-                        });
-                    }
+                        for (const selector of selectors) {
+                            const matches = Array.from(document.querySelectorAll(selector));
+                            const visible = matches.find(isVisible);
+                            if (visible) {
+                                return visible;
+                            }
+                        }
 
+                        return null;
+                    };
 
-                    // ---------------------------------------------
-                    // FOCUS INPUT
-                    // ---------------------------------------------
-
-                    input.focus();
-
-
-                    // ---------------------------------------------
-                    // TEXTAREA CASE
-                    // ---------------------------------------------
-
-                    if (
-                        input instanceof HTMLTextAreaElement ||
-                        input instanceof HTMLInputElement
-                    ) {
+                    const insertIntoTextarea = (el, value) => {
                         const prototype =
-                            input instanceof HTMLTextAreaElement
+                            el instanceof HTMLTextAreaElement
                                 ? HTMLTextAreaElement.prototype
                                 : HTMLInputElement.prototype;
 
-                        const descriptor =
-                            Object.getOwnPropertyDescriptor(
-                                prototype,
-                                'value'
-                            );
-
-                        if (
-                            descriptor &&
-                            descriptor.set
-                        ) {
-                            descriptor.set.call(
-                                input,
-                                text
-                            );
+                        const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+                        if (descriptor && descriptor.set) {
+                            descriptor.set.call(el, value);
                         } else {
-                            input.value =
-                                text;
+                            el.value = value;
                         }
 
-                        input.dispatchEvent(
-                            new Event(
-                                'input',
-                                {
-                                    bubbles: true
-                                }
-                            )
-                        );
-                    }
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    };
 
-                    // ---------------------------------------------
-                    // CONTENTEDITABLE CASE
-                    // ---------------------------------------------
+                    const selectAll = (el) => {
+                        if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+                            el.select();
+                            return;
+                        }
 
-                    else {
-                        input.textContent =
-                            text;
+                        const selection = window.getSelection();
+                        const range = document.createRange();
+                        range.selectNodeContents(el);
+                        selection.removeAllRanges();
+                        selection.addRange(range);
+                    };
 
-                        input.dispatchEvent(
-                            new InputEvent(
-                                'input',
-                                {
-                                    bubbles: true,
-                                    inputType: 'insertText',
-                                    data: text
-                                }
-                            )
-                        );
-                    }
+                    const insertIntoComposer = async (el, value) => {
+                        if (composerHasText(el, value)) {
+                            return true;
+                        }
 
+                        try {
+                            window.focus();
+                            el.focus();
+                            el.click();
+                        } catch { }
 
-                    // ---------------------------------------------
-                    // WAIT FOR CHATGPT UI TO UPDATE
-                    // ---------------------------------------------
+                        if (
+                            el instanceof HTMLTextAreaElement ||
+                            el instanceof HTMLInputElement
+                        ) {
+                            insertIntoTextarea(el, value);
+                            await wait(50);
+                            return composerHasText(el, value);
+                        }
 
-                    setTimeout(
-                        () => {
+                        selectAll(el);
+                        try {
+                            document.execCommand('insertText', false, value);
+                        } catch { }
 
-                            // Prefer clicking the actual Send button.
+                        await wait(80);
+                        if (composerHasText(el, value)) {
+                            return true;
+                        }
 
-                            const sendButton =
-                                document.querySelector(
-                                    'button[data-testid="send-button"]'
-                                ) ||
-                                document.querySelector(
-                                    'button[aria-label="Send prompt"]'
-                                ) ||
-                                document.querySelector(
-                                    'button[aria-label="Send message"]'
-                                );
+                        selectAll(el);
+                        try {
+                            const dataTransfer = new DataTransfer();
+                            dataTransfer.setData('text/plain', value);
+                            el.dispatchEvent(new ClipboardEvent('paste', {
+                                clipboardData: dataTransfer,
+                                bubbles: true,
+                                cancelable: true
+                            }));
+                        } catch { }
 
-                            if (
-                                sendButton &&
-                                !sendButton.disabled
-                            ) {
-                                sendButton.click();
+                        await wait(80);
+                        return composerHasText(el, value);
+                    };
 
-                                return;
+                    const isUsableSendButton = (button) => {
+                        if (!button || !isVisible(button)) {
+                            return false;
+                        }
+
+                        const testId = (button.getAttribute('data-testid') || '').toLowerCase();
+                        const label = (button.getAttribute('aria-label') || '').toLowerCase();
+                        if (testId.includes('stop') || label.includes('stop')) {
+                            return false;
+                        }
+
+                        if (button.disabled || button.getAttribute('aria-disabled') === 'true') {
+                            return false;
+                        }
+
+                        return true;
+                    };
+
+                    const findSendButton = () => {
+                        const selectors = [
+                            '#composer-submit-button',
+                            'button[data-testid="send-button"]',
+                            'button[data-testid="composer-send-button"]',
+                            'button[aria-label="Send prompt"]',
+                            'button[aria-label="Send message"]',
+                            'button[aria-label="Send"]'
+                        ];
+
+                        for (const selector of selectors) {
+                            const button = document.querySelector(selector);
+                            if (isUsableSendButton(button)) {
+                                return button;
+                            }
+                        }
+
+                        const form = document.querySelector('form');
+                        if (form) {
+                            const submit = form.querySelector('button[type="submit"]');
+                            if (isUsableSendButton(submit)) {
+                                return submit;
+                            }
+                        }
+
+                        return null;
+                    };
+
+                    const pressEnter = (el) => {
+                        const options = {
+                            key: 'Enter',
+                            code: 'Enter',
+                            keyCode: 13,
+                            which: 13,
+                            bubbles: true,
+                            cancelable: true
+                        };
+
+                        el.dispatchEvent(new KeyboardEvent('keydown', options));
+                        el.dispatchEvent(new KeyboardEvent('keypress', options));
+                        el.dispatchEvent(new KeyboardEvent('keyup', options));
+                    };
+
+                    try {
+                        let input = null;
+                        for (let i = 0; i < 10; i++) {
+                            input = findComposer();
+                            if (input && input.getAttribute('contenteditable') !== 'false') {
+                                break;
                             }
 
+                            await wait(100);
+                        }
 
-                            // -------------------------------------
-                            // FALLBACK: ENTER KEY
-                            // -------------------------------------
+                        if (!input) {
+                            return JSON.stringify({
+                                success: false,
+                                reason: 'input-not-found'
+                            });
+                        }
 
-                            input.dispatchEvent(
-                                new KeyboardEvent(
-                                    'keydown',
-                                    {
-                                        key: 'Enter',
-                                        code: 'Enter',
-                                        keyCode: 13,
-                                        which: 13,
-                                        bubbles: true,
-                                        cancelable: true
-                                    }
-                                )
-                            );
+                        for (let i = 0; i < 4; i++) {
+                            if (composerHasText(input, text)) {
+                                break;
+                            }
 
-                        },
-                        150
-                    );
+                            await insertIntoComposer(input, text);
+                            await wait(80);
+                        }
 
+                        if (!composerHasText(input, text)) {
+                            return JSON.stringify({
+                                success: false,
+                                reason: 'insert-failed'
+                            });
+                        }
 
-                    return JSON.stringify({
-                        success: true
-                    });
-                })();
+                        for (let i = 0; i < 20; i++) {
+                            const sendButton = findSendButton();
+                            if (sendButton) {
+                                sendButton.click();
+                                return JSON.stringify({
+                                    success: true,
+                                    method: 'button'
+                                });
+                            }
+
+                            await wait(80);
+                        }
+
+                        input.focus();
+                        pressEnter(input);
+
+                        return JSON.stringify({
+                            success: true,
+                            method: 'enter'
+                        });
+                    } catch (error) {
+                        return JSON.stringify({
+                            success: false,
+                            reason: String(error)
+                        });
+                    }
+                })()
                 """;
 
             string result =

@@ -424,47 +424,106 @@ namespace PrivateBrowser
         {
             lock (_lock)
             {
-                StringBuilder builder =
-                    new StringBuilder();
+                return FormatItems(
+                    _history
+                );
+            }
+        }
 
 
-                foreach (
-                    CaptionItem item
-                    in _history
+        // =========================================================
+        // RECENT TRANSCRIPT BLOCKS
+        // =========================================================
+
+        public string GetRecentTranscript(
+            int count
+        )
+        {
+            lock (_lock)
+            {
+                if (
+                    count <= 0 ||
+                    _history.Count == 0
                 )
                 {
-                    if (
-                        builder.Length >
-                        0
-                    )
-                    {
-                        builder.AppendLine();
-                        builder.AppendLine();
-                    }
-
-
-                    if (
-                        !string.IsNullOrWhiteSpace(
-                            item.Speaker
-                        )
-                    )
-                    {
-                        builder.Append(
-                            item.Speaker
-                        );
-
-                        builder.AppendLine();
-                    }
-
-
-                    builder.Append(
-                        item.Text
-                    );
+                    return string.Empty;
                 }
 
 
-                return builder.ToString();
+                int start =
+                    Math.Max(
+                        0,
+                        _history.Count - count
+                    );
+
+
+                return FormatItems(
+                    _history.Skip(
+                        start
+                    ),
+                    "-----"
+                );
             }
+        }
+
+
+        private static string FormatItems(
+            IEnumerable<CaptionItem> items,
+            string? blockSeparator = null
+        )
+        {
+            StringBuilder builder =
+                new StringBuilder();
+
+
+            foreach (
+                CaptionItem item
+                in items
+            )
+            {
+                if (
+                    builder.Length >
+                    0
+                )
+                {
+                    builder.AppendLine();
+
+                    if (
+                        !string.IsNullOrWhiteSpace(
+                            blockSeparator
+                        )
+                    )
+                    {
+                        builder.AppendLine(
+                            blockSeparator
+                        );
+                    }
+
+                    builder.AppendLine();
+                }
+
+
+                if (
+                    !string.IsNullOrWhiteSpace(
+                        item.Speaker
+                    )
+                )
+                {
+                    builder.Append(
+                        item.Speaker
+                    );
+
+                    builder.AppendLine();
+                }
+
+
+                builder.Append(
+                    item.Text
+                );
+            }
+
+
+            return builder.ToString();
         }
 
 
