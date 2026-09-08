@@ -2,3 +2,7 @@
 /PrivateBrowser/obj/
 /PrivateBrowser/Models/
 /PrivateBrowser.LicenseAdmin/
+/PrivateBrowser.Mac/bin/
+/PrivateBrowser.Mac/obj/
+/PrivateBrowser.Mac/build/
+/PrivateBrowser.Mac/Models/

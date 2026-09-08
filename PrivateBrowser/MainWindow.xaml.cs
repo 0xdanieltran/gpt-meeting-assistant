@@ -1,6 +1,8 @@
 ﻿using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -9,6 +11,9 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using System.Text;
 using System.Text.Json;
 
@@ -21,6 +26,7 @@ using WpfColor = System.Windows.Media.Color;
 using WpfSolidColorBrush = System.Windows.Media.SolidColorBrush;
 using WpfKeyEventArgs = System.Windows.Input.KeyEventArgs;
 using WpfClipboard = System.Windows.Clipboard;
+using WpfDataObject = System.Windows.DataObject;
 using WpfMessageBox = System.Windows.MessageBox;
 using WpfMessageBoxButton = System.Windows.MessageBoxButton;
 using WpfMessageBoxImage = System.Windows.MessageBoxImage;
@@ -39,6 +45,13 @@ namespace PrivateBrowser
         // =========================================================
 
         private IntPtr _windowHandle = IntPtr.Zero;
+
+        private BrowserOverlayWindow _browserOverlay = null!;
+
+        private WebView2 Browser =>
+            _browserOverlay.WebViewControl;
+
+        private bool _overlaySyncQueued;
 
         private readonly Dictionary<string, WpfBrush>
             _speakerBrushes =
@@ -2246,6 +2259,18 @@ namespace PrivateBrowser
         private const uint WDA_EXCLUDEFROMCAPTURE =
             0x00000011;
 
+        private const int GWL_EXSTYLE = -20;
+        private const int WS_EX_LAYERED = 0x00080000;
+        private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_NOMOVE = 0x0002;
+        private const uint SWP_NOZORDER = 0x0004;
+        private const uint SWP_NOACTIVATE = 0x0010;
+        private const uint SWP_FRAMECHANGED = 0x0020;
+
+        private byte _windowAlpha = 255;
+        private double _overlayOpacity = 1.0;
+        private readonly EnumChildProc _clearWebViewLayeredCallback;
+
 
         [DllImport(
             "user32.dll",
@@ -2267,6 +2292,110 @@ namespace PrivateBrowser
         );
 
 
+        private delegate bool EnumChildProc(
+            IntPtr hWnd,
+            IntPtr lParam
+        );
+
+
+        [DllImport(
+            "user32.dll"
+        )]
+        private static extern bool EnumChildWindows(
+            IntPtr hWndParent,
+            EnumChildProc lpEnumFunc,
+            IntPtr lParam
+        );
+
+
+        [DllImport(
+            "user32.dll",
+            EntryPoint = "GetWindowLong",
+            SetLastError = true
+        )]
+        private static extern int GetWindowLong32(
+            IntPtr hWnd,
+            int nIndex
+        );
+
+
+        [DllImport(
+            "user32.dll",
+            EntryPoint = "GetWindowLongPtr",
+            SetLastError = true
+        )]
+        private static extern IntPtr GetWindowLongPtr64(
+            IntPtr hWnd,
+            int nIndex
+        );
+
+
+        [DllImport(
+            "user32.dll",
+            EntryPoint = "SetWindowLong",
+            SetLastError = true
+        )]
+        private static extern int SetWindowLong32(
+            IntPtr hWnd,
+            int nIndex,
+            int dwNewLong
+        );
+
+
+        [DllImport(
+            "user32.dll",
+            EntryPoint = "SetWindowLongPtr",
+            SetLastError = true
+        )]
+        private static extern IntPtr SetWindowLongPtr64(
+            IntPtr hWnd,
+            int nIndex,
+            IntPtr dwNewLong
+        );
+
+
+        [DllImport(
+            "user32.dll",
+            SetLastError = true
+        )]
+        private static extern bool SetWindowPos(
+            IntPtr hWnd,
+            IntPtr hWndInsertAfter,
+            int x,
+            int y,
+            int cx,
+            int cy,
+            uint uFlags
+        );
+
+
+        private static IntPtr GetWindowLongPtr(
+            IntPtr hWnd,
+            int nIndex
+        )
+        {
+            return IntPtr.Size == 8
+                ? GetWindowLongPtr64(hWnd, nIndex)
+                : new IntPtr(GetWindowLong32(hWnd, nIndex));
+        }
+
+
+        private static void SetWindowLongPtr(
+            IntPtr hWnd,
+            int nIndex,
+            IntPtr value
+        )
+        {
+            if (IntPtr.Size == 8)
+            {
+                SetWindowLongPtr64(hWnd, nIndex, value);
+                return;
+            }
+
+            SetWindowLong32(hWnd, nIndex, value.ToInt32());
+        }
+
+
         // =========================================================
         // GLOBAL HOTKEYS
         // =========================================================
@@ -2276,6 +2405,7 @@ namespace PrivateBrowser
         private const int HOTKEY_COPY_LATEST_AND_SEND = 1003;
         private const int HOTKEY_PASTE_AND_SEND = 1004;
         private const int HOTKEY_TOGGLE_BROWSER = 1005;
+        private const int HOTKEY_SCREENSHOT = 1006;
 
 
         private const uint MOD_CONTROL =
@@ -2293,10 +2423,26 @@ namespace PrivateBrowser
         private const uint VK_S = 0x53;
         private const uint VK_V = 0x56;
         private const uint VK_Q = 0x51;
+        private const uint VK_X = 0x58;
+        private const ushort VK_CONTROL = 0x11;
+
+        private const uint INPUT_KEYBOARD = 1;
+        private const uint KEYEVENTF_KEYUP = 0x0002;
+
+        private const string ScreenshotAnalysisPrompt =
+            "Please analyze the attached screenshot. If it contains a coding problem, written question, exam prompt, or other on-screen task, provide a correct and complete solution. If it shows code, identify any issues and include a corrected implementation. Present the answer clearly and precisely.";
+
+        private bool _screenshotBusy;
 
 
         private const int WM_HOTKEY =
             0x0312;
+
+        private const int WM_NCHITTEST =
+            0x0084;
+
+        private const int HTCLIENT =
+            1;
 
 
         [DllImport(
@@ -2321,13 +2467,87 @@ namespace PrivateBrowser
         );
 
 
+        [DllImport(
+            "user32.dll",
+            SetLastError = true
+        )]
+        private static extern uint SendInput(
+            uint nInputs,
+            INPUT[] pInputs,
+            int cbSize
+        );
+
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct INPUT
+        {
+            public uint type;
+            public InputUnion U;
+
+            public static int Size =>
+                Marshal.SizeOf<INPUT>();
+        }
+
+
+        [StructLayout(LayoutKind.Explicit)]
+        private struct InputUnion
+        {
+            [FieldOffset(0)]
+            public MOUSEINPUT mi;
+
+            [FieldOffset(0)]
+            public KEYBDINPUT ki;
+
+            [FieldOffset(0)]
+            public HARDWAREINPUT hi;
+        }
+
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct KEYBDINPUT
+        {
+            public ushort wVk;
+            public ushort wScan;
+            public uint dwFlags;
+            public uint time;
+            public UIntPtr dwExtraInfo;
+        }
+
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MOUSEINPUT
+        {
+            public int dx;
+            public int dy;
+            public uint mouseData;
+            public uint dwFlags;
+            public uint time;
+            public UIntPtr dwExtraInfo;
+        }
+
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct HARDWAREINPUT
+        {
+            public uint uMsg;
+            public ushort wParamL;
+            public ushort wParamH;
+        }
+
+
         // =========================================================
         // CONSTRUCTOR
         // =========================================================
 
         public MainWindow()
         {
+            _clearWebViewLayeredCallback =
+                ClearWebViewChildLayeredStyle;
+
             InitializeComponent();
+
+            _browserOverlay =
+                new BrowserOverlayWindow();
 
             InitializeTrayIcon();
 
@@ -2350,9 +2570,17 @@ namespace PrivateBrowser
             Closed +=
                 MainWindow_Closed;
 
+            LocationChanged +=
+                (_, _) => QueueSyncBrowserOverlay();
+
+            SizeChanged +=
+                (_, _) => QueueSyncBrowserOverlay();
+
+            LayoutUpdated +=
+                (_, _) => QueueSyncBrowserOverlay();
+
             StateChanged +=
                 MainWindow_StateChanged;
-
         }
 
 
@@ -2496,8 +2724,25 @@ namespace PrivateBrowser
                     ExitApplication();
                 };
 
+            Forms.ToolStripMenuItem resetOpacityItem =
+                new Forms.ToolStripMenuItem(
+                    "Reset opacity to 100%"
+                );
+
+            resetOpacityItem.Click +=
+                (_, _) =>
+                {
+                    Dispatcher.BeginInvoke(
+                        new Action(ResetWindowOpacityToOpaque)
+                    );
+                };
+
             menu.Items.Add(
                 showItem
+            );
+
+            menu.Items.Add(
+                resetOpacityItem
             );
 
             menu.Items.Add(
@@ -2544,6 +2789,11 @@ namespace PrivateBrowser
                 new Action(
                     () =>
                     {
+                        if (_windowAlpha == 0)
+                        {
+                            ResetWindowOpacityToOpaque();
+                        }
+
                         if (_browserHiddenByHotkey)
                         {
                             RestorePrivateBrowserFromHotkey();
@@ -2590,6 +2840,7 @@ namespace PrivateBrowser
                         Topmost = true;
 
                         Focus();
+                        QueueSyncBrowserOverlay();
                     }
                 )
             );
@@ -2728,8 +2979,11 @@ namespace PrivateBrowser
                 null
             )
             {
+                _browserOverlay.Activate();
                 Browser.Focus();
             }
+
+            QueueSyncBrowserOverlay();
         }
 
 
@@ -2837,6 +3091,8 @@ namespace PrivateBrowser
         {
             try
             {
+                ShowBrowserOverlay();
+
                 // -------------------------------------------------
                 // WEBVIEW2 PROFILE
                 // -------------------------------------------------
@@ -2879,9 +3135,19 @@ namespace PrivateBrowser
                         environment
                     );
 
+                // Transparent (0,0,0,0) paints black in WebView2. Keep an
+                // unlit white so ChatGPT's own rgba backgrounds can fade.
+                Browser.DefaultBackgroundColor =
+                    Drawing.Color.FromArgb(0, 255, 255, 255);
+
                 Browser.CoreWebView2.Profile
                     .PreferredTrackingPreventionLevel =
                     CoreWebView2TrackingPreventionLevel.None;
+
+                await Browser.CoreWebView2
+                    .AddScriptToExecuteOnDocumentCreatedAsync(
+                        BuildChatGptOpacityScript("1")
+                    );
 
 
                 // =====================================================
@@ -2901,9 +3167,20 @@ namespace PrivateBrowser
                 bool protectedOk =
                     EnableCaptureProtection();
 
+                EnableCaptureProtection(
+                    GetBrowserOverlayHandle()
+                );
+
                 System.Diagnostics.Debug.WriteLine(
                     $"Capture protection after WebView2 init: {protectedOk}"
                 );
+
+                ApplyWindowOpacity(100);
+                if (OpacitySlider != null)
+                {
+                    OpacitySlider.Value = 100;
+                }
+                EnsureCaptureProtectionStillEnabled();
 
 
                 Browser.CoreWebView2
@@ -3098,6 +3375,8 @@ namespace PrivateBrowser
 
             ForwardButton.IsEnabled =
                 Browser.CanGoForward;
+
+            _ = ApplyChatGptPageOpacityAsync();
         }
 
 
@@ -3210,8 +3489,16 @@ namespace PrivateBrowser
 
         private bool EnableCaptureProtection()
         {
+            return EnableCaptureProtection(_windowHandle);
+        }
+
+
+        private bool EnableCaptureProtection(
+            IntPtr hwnd
+        )
+        {
             if (
-                _windowHandle ==
+                hwnd ==
                 IntPtr.Zero
             )
             {
@@ -3221,7 +3508,7 @@ namespace PrivateBrowser
 
             bool setOk =
                 SetWindowDisplayAffinity(
-                    _windowHandle,
+                    hwnd,
                     WDA_EXCLUDEFROMCAPTURE
                 );
 
@@ -3241,7 +3528,7 @@ namespace PrivateBrowser
 
             bool getOk =
                 GetWindowDisplayAffinity(
-                    _windowHandle,
+                    hwnd,
                     out uint currentAffinity
                 );
 
@@ -3262,6 +3549,735 @@ namespace PrivateBrowser
         }
 
 
+        private void EnsureCaptureProtectionStillEnabled()
+        {
+            if (_windowHandle == IntPtr.Zero)
+            {
+                return;
+            }
+
+            bool getOk =
+                GetWindowDisplayAffinity(
+                    _windowHandle,
+                    out uint currentAffinity
+                );
+
+            if (
+                getOk &&
+                currentAffinity ==
+                WDA_EXCLUDEFROMCAPTURE
+            )
+            {
+                return;
+            }
+
+            EnableCaptureProtection();
+            EnableCaptureProtection(
+                GetBrowserOverlayHandle()
+            );
+        }
+
+
+        private void ShowBrowserOverlay()
+        {
+            if (_browserOverlay == null)
+            {
+                return;
+            }
+
+            AssignBrowserOverlayOwner();
+            _browserOverlay.ShowActivated = false;
+
+            if (IsVisible && !_browserOverlay.IsVisible)
+            {
+                _browserOverlay.Show();
+            }
+
+            QueueSyncBrowserOverlay();
+        }
+
+
+        private void AssignBrowserOverlayOwner()
+        {
+            if (
+                _browserOverlay == null ||
+                !IsVisible ||
+                _browserOverlay.Owner == this
+            )
+            {
+                return;
+            }
+
+            _browserOverlay.Owner = this;
+        }
+
+
+        private void QueueSyncBrowserOverlay()
+        {
+            if (_overlaySyncQueued)
+            {
+                return;
+            }
+
+            _overlaySyncQueued = true;
+
+            Dispatcher.BeginInvoke(
+                new Action(
+                    () =>
+                    {
+                        _overlaySyncQueued = false;
+                        SyncBrowserOverlay();
+                    }
+                ),
+                DispatcherPriority.Render
+            );
+        }
+
+
+        private void SyncBrowserOverlay()
+        {
+            if (
+                _browserOverlay == null ||
+                BrowserHost == null
+            )
+            {
+                return;
+            }
+
+            if (
+                !IsVisible ||
+                _browserHiddenByHotkey ||
+                BrowserHost.ActualWidth < 2 ||
+                BrowserHost.ActualHeight < 2
+            )
+            {
+                if (_browserOverlay.IsVisible)
+                {
+                    _browserOverlay.Hide();
+                }
+
+                return;
+            }
+
+            if (!_browserOverlay.IsVisible)
+            {
+                AssignBrowserOverlayOwner();
+                _browserOverlay.Show();
+            }
+
+            try
+            {
+                System.Windows.Point pixels =
+                    BrowserHost.PointToScreen(
+                        new System.Windows.Point(0, 0)
+                    );
+
+                PresentationSource? source =
+                    PresentationSource.FromVisual(this);
+
+                if (source?.CompositionTarget != null)
+                {
+                    System.Windows.Point dips =
+                        source.CompositionTarget.TransformFromDevice
+                            .Transform(pixels);
+
+                    _browserOverlay.Left = dips.X;
+                    _browserOverlay.Top = dips.Y;
+                }
+                else
+                {
+                    _browserOverlay.Left = pixels.X;
+                    _browserOverlay.Top = pixels.Y;
+                }
+
+                _browserOverlay.Width = BrowserHost.ActualWidth;
+                _browserOverlay.Height = BrowserHost.ActualHeight;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Browser overlay sync failed: {ex.Message}"
+                );
+            }
+
+            RestoreWebViewHitTesting();
+            EnableCaptureProtection(GetBrowserOverlayHandle());
+        }
+
+
+        private IntPtr GetBrowserOverlayHandle()
+        {
+            if (_browserOverlay == null)
+            {
+                return IntPtr.Zero;
+            }
+
+            return new WindowInteropHelper(_browserOverlay).EnsureHandle();
+        }
+
+
+        private void ApplyWindowOpacity(
+            double percent
+        )
+        {
+            percent =
+                Math.Clamp(
+                    percent,
+                    10,
+                    100
+                );
+
+            // Do not set Window.Opacity. That blends toward black on this
+            // WebView2 stack instead of showing windows behind.
+            Opacity = 1.0;
+
+            _overlayOpacity =
+                percent / 100.0;
+
+            _windowAlpha =
+                (byte)Math.Clamp(
+                    Math.Round(_overlayOpacity * 255.0),
+                    26,
+                    255
+                );
+
+            if (NavBar != null)
+            {
+                NavBar.Opacity = _overlayOpacity;
+            }
+
+            if (CaptionPanel != null)
+            {
+                CaptionPanel.Opacity = _overlayOpacity;
+            }
+
+            if (CaptionSplitter != null)
+            {
+                CaptionSplitter.Opacity = _overlayOpacity;
+            }
+
+            if (CaptionToggleButton != null)
+            {
+                CaptionToggleButton.Opacity = _overlayOpacity;
+            }
+
+            RestoreWebViewHitTesting();
+            _ = ApplyChatGptPageOpacityAsync();
+            QueueSyncBrowserOverlay();
+            EnsureCaptureProtectionStillEnabled();
+        }
+
+
+        private async Task ApplyChatGptPageOpacityAsync()
+        {
+            if (Browser?.CoreWebView2 == null)
+            {
+                return;
+            }
+
+            string opacityLiteral =
+                _overlayOpacity.ToString(
+                    "0.###",
+                    CultureInfo.InvariantCulture
+                );
+
+            try
+            {
+                await Browser.CoreWebView2.ExecuteScriptAsync(
+                    BuildChatGptOpacityScript(opacityLiteral)
+                );
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Page opacity script failed: {ex.Message}"
+                );
+            }
+        }
+
+
+        private static string BuildChatGptOpacityScript(
+            string opacityLiteral
+        )
+        {
+            return $$"""
+                (() => {
+                    window.__pbOverlayOpacity = {{opacityLiteral}};
+
+                    const STYLE_ID = 'pb-overlay-opacity';
+
+                    function parseRgba(input) {
+                        if (!input || input === 'transparent') {
+                            return null;
+                        }
+                        const raw = String(input).trim();
+                        const rgb = raw.match(
+                            /rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)(?:\s*,\s*([0-9.]+))?\s*\)/i
+                        );
+                        if (rgb) {
+                            return {
+                                r: +rgb[1],
+                                g: +rgb[2],
+                                b: +rgb[3],
+                                a: rgb[4] === undefined ? 1 : +rgb[4]
+                            };
+                        }
+                        const hex6 = raw.match(/^#([0-9a-f]{6})$/i);
+                        if (hex6) {
+                            return {
+                                r: parseInt(hex6[1].slice(0, 2), 16),
+                                g: parseInt(hex6[1].slice(2, 4), 16),
+                                b: parseInt(hex6[1].slice(4, 6), 16),
+                                a: 1
+                            };
+                        }
+                        const hex3 = raw.match(/^#([0-9a-f]{3})$/i);
+                        if (hex3) {
+                            return {
+                                r: parseInt(hex3[1][0] + hex3[1][0], 16),
+                                g: parseInt(hex3[1][1] + hex3[1][1], 16),
+                                b: parseInt(hex3[1][2] + hex3[1][2], 16),
+                                a: 1
+                            };
+                        }
+                        return null;
+                    }
+
+                    function isDarkTheme() {
+                        const root = document.documentElement;
+                        const body = document.body;
+                        const cls = (
+                            (root && root.className || '') + ' ' +
+                            (body && body.className || '') + ' ' +
+                            (root && root.getAttribute('data-theme') || '')
+                        ).toLowerCase();
+                        if (/\bdark\b/.test(cls)) {
+                            return true;
+                        }
+                        if (/\blight\b/.test(cls)) {
+                            return false;
+                        }
+                        if (window.__pbDefaultMain) {
+                            return window.__pbDefaultMain.r < 80;
+                        }
+                        return !!(
+                            window.matchMedia &&
+                            window.matchMedia('(prefers-color-scheme: dark)').matches
+                        );
+                    }
+
+                    function isSurface(c) {
+                        if (!c || c.a < 0.08) {
+                            return false;
+                        }
+                        const max = Math.max(c.r, c.g, c.b);
+                        const min = Math.min(c.r, c.g, c.b);
+                        return (max - min) <= 45 && (max >= 210 || max <= 80);
+                    }
+
+                    function fallbackMain() {
+                        return isDarkTheme()
+                            ? { r: 33, g: 33, b: 33 }
+                            : { r: 255, g: 255, b: 255 };
+                    }
+
+                    function fallbackSidebar() {
+                        return isDarkTheme()
+                            ? { r: 32, g: 33, b: 35 }
+                            : { r: 247, g: 247, b: 248 };
+                    }
+
+                    function firstVar(cs, names) {
+                        for (let i = 0; i < names.length; i++) {
+                            const value = cs.getPropertyValue(names[i]).trim();
+                            if (value) {
+                                return value;
+                            }
+                        }
+                        return '';
+                    }
+
+                    function tryCaptureDefaults() {
+                        if (window.__pbCapturedDefaults) {
+                            return;
+                        }
+                        const cs = getComputedStyle(document.documentElement);
+                        const main = parseRgba(
+                            firstVar(cs, [
+                                '--token-main-surface-primary',
+                                '--main-surface-primary',
+                                '--bg-primary',
+                                '--background'
+                            ])
+                        );
+                        if (!main || main.a < 0.95) {
+                            return;
+                        }
+                        const sidebar = parseRgba(
+                            firstVar(cs, [
+                                '--token-sidebar-surface-primary',
+                                '--sidebar-surface-primary'
+                            ])
+                        );
+                        window.__pbDefaultMain = {
+                            r: main.r,
+                            g: main.g,
+                            b: main.b
+                        };
+                        window.__pbDefaultSidebar =
+                            sidebar && sidebar.a >= 0.95
+                                ? { r: sidebar.r, g: sidebar.g, b: sidebar.b }
+                                : fallbackSidebar();
+                        window.__pbCapturedDefaults = true;
+                    }
+
+                    function rgbaOf(rgb, opacity) {
+                        const color = rgb || fallbackMain();
+                        return 'rgba(' +
+                            Math.round(color.r) + ', ' +
+                            Math.round(color.g) + ', ' +
+                            Math.round(color.b) + ', ' +
+                            opacity + ')';
+                    }
+
+                    function ensureStyle() {
+                        tryCaptureDefaults();
+                        const opacity = window.__pbOverlayOpacity;
+                        const main = rgbaOf(
+                            window.__pbDefaultMain || fallbackMain(),
+                            opacity
+                        );
+                        const sidebar = rgbaOf(
+                            window.__pbDefaultSidebar || fallbackSidebar(),
+                            opacity
+                        );
+                        let style = document.getElementById(STYLE_ID);
+                        if (!style) {
+                            style = document.createElement('style');
+                            style.id = STYLE_ID;
+                            (document.head || document.documentElement)
+                                .appendChild(style);
+                        }
+                        style.textContent =
+                            'html, body, #__next, #root {' +
+                            '  background: ' + main + ' !important;' +
+                            '  background-color: ' + main + ' !important;' +
+                            '  opacity: 1 !important;' +
+                            '}' +
+                            'html {' +
+                            '  --background: ' + main + ' !important;' +
+                            '  --bg-primary: ' + main + ' !important;' +
+                            '  --bg-secondary: ' + main + ' !important;' +
+                            '  --bg-tertiary: ' + main + ' !important;' +
+                            '  --main-surface-primary: ' + main + ' !important;' +
+                            '  --main-surface-secondary: ' + main + ' !important;' +
+                            '  --main-surface-tertiary: ' + main + ' !important;' +
+                            '  --token-bg-primary: ' + main + ' !important;' +
+                            '  --token-main-surface-primary: ' + main + ' !important;' +
+                            '  --token-main-surface-secondary: ' + main + ' !important;' +
+                            '  --token-main-surface-tertiary: ' + main + ' !important;' +
+                            '  --sidebar-surface-primary: ' + sidebar + ' !important;' +
+                            '  --sidebar-surface-secondary: ' + sidebar + ' !important;' +
+                            '  --token-sidebar-surface-primary: ' + sidebar + ' !important;' +
+                            '  --token-sidebar-surface-secondary: ' + sidebar + ' !important;' +
+                            '}' +
+                            '[data-pb-bg="main"] {' +
+                            '  background: ' + main + ' !important;' +
+                            '  background-color: ' + main + ' !important;' +
+                            '}' +
+                            '[data-pb-bg="sidebar"] {' +
+                            '  background: ' + sidebar + ' !important;' +
+                            '  background-color: ' + sidebar + ' !important;' +
+                            '}';
+                    }
+
+                    function mark(el, kind) {
+                        if (!el || el.nodeType !== 1) {
+                            return;
+                        }
+                        if (el.getAttribute('data-pb-bg') !== kind) {
+                            el.setAttribute('data-pb-bg', kind);
+                        }
+                    }
+
+                    function isComposerRoot(el) {
+                        if (!el) {
+                            return false;
+                        }
+                        const testId = el.getAttribute('data-testid') || '';
+                        if (el.tagName !== 'FORM' && testId !== 'composer') {
+                            return false;
+                        }
+                        const r = el.getBoundingClientRect();
+                        const vw = window.innerWidth || 1;
+                        const vh = window.innerHeight || 1;
+                        return r.height > 24 &&
+                            r.height < vh * 0.42 &&
+                            r.width > vw * 0.2;
+                    }
+
+                    function walk(el, inSidebar) {
+                        if (!el || el.nodeType !== 1) {
+                            return;
+                        }
+                        const tag = el.tagName;
+                        if (
+                            tag === 'SCRIPT' ||
+                            tag === 'STYLE' ||
+                            tag === 'SVG' ||
+                            tag === 'IMG' ||
+                            tag === 'CANVAS' ||
+                            tag === 'VIDEO'
+                        ) {
+                            return;
+                        }
+
+                        const r = el.getBoundingClientRect();
+                        const vw = window.innerWidth || 1;
+                        const vh = window.innerHeight || 1;
+
+                        const leftBar = !inSidebar &&
+                            r.width >= 36 &&
+                            r.width <= 440 &&
+                            r.height >= vh * 0.45 &&
+                            r.left < 90 &&
+                            r.top < vh * 0.25;
+
+                        const composer = !inSidebar &&
+                            !leftBar &&
+                            isComposerRoot(el);
+
+                        const nextSidebar = inSidebar || leftBar || composer;
+                        const bg = parseRgba(
+                            getComputedStyle(el).backgroundColor
+                        );
+
+                        if (leftBar || inSidebar || composer) {
+                            if (isSurface(bg)) {
+                                mark(el, 'sidebar');
+                            }
+                        } else {
+                            const bigCanvas =
+                                r.width >= vw * 0.28 &&
+                                r.height >= vh * 0.28;
+                            if (bigCanvas && isSurface(bg)) {
+                                mark(el, 'main');
+                            }
+                        }
+
+                        const kids = el.children;
+                        for (let i = 0; i < kids.length; i++) {
+                            walk(kids[i], nextSidebar);
+                        }
+                    }
+
+                    function apply() {
+                        ensureStyle();
+                        if (!document.body) {
+                            return;
+                        }
+                        document.querySelectorAll('[data-pb-bg]').forEach(
+                            function (node) {
+                                node.removeAttribute('data-pb-bg');
+                            }
+                        );
+                        walk(document.body, false);
+                    }
+
+                    window.__pbApplyOverlayOpacity = apply;
+                    apply();
+
+                    if (!window.__pbOpacityObserver && document.documentElement) {
+                        let timer = 0;
+                        window.__pbOpacityObserver = new MutationObserver(
+                            function (mutations) {
+                                for (let i = 0; i < mutations.length; i++) {
+                                    const t = mutations[i].target;
+                                    if (
+                                        t &&
+                                        t.closest &&
+                                        t.closest('[data-message-author-role]')
+                                    ) {
+                                        continue;
+                                    }
+                                    if (timer) {
+                                        clearTimeout(timer);
+                                    }
+                                    timer = setTimeout(apply, 180);
+                                    return;
+                                }
+                            }
+                        );
+                        window.__pbOpacityObserver.observe(
+                            document.documentElement,
+                            { childList: true, subtree: true }
+                        );
+                    }
+                })()
+                """;
+        }
+
+
+        private void RestoreWebViewHitTesting()
+        {
+            IntPtr browserHwnd =
+                IntPtr.Zero;
+
+            try
+            {
+                if (Browser != null)
+                {
+                    browserHwnd =
+                        Browser.Handle;
+                }
+            }
+            catch
+            {
+                return;
+            }
+
+            if (browserHwnd == IntPtr.Zero)
+            {
+                return;
+            }
+
+            ClearWindowLayeredStyle(browserHwnd);
+            EnumChildWindows(
+                browserHwnd,
+                _clearWebViewLayeredCallback,
+                IntPtr.Zero
+            );
+        }
+
+
+        private bool ClearWebViewChildLayeredStyle(
+            IntPtr hWnd,
+            IntPtr lParam
+        )
+        {
+            ClearWindowLayeredStyle(hWnd);
+            return true;
+        }
+
+
+        private void ClearWindowLayeredStyle(
+            IntPtr hwnd
+        )
+        {
+            if (hwnd == IntPtr.Zero)
+            {
+                return;
+            }
+
+            int exStyle = GetExtendedStyle(hwnd);
+            if ((exStyle & WS_EX_LAYERED) == 0)
+            {
+                return;
+            }
+
+            SetExtendedStyle(
+                hwnd,
+                exStyle & ~WS_EX_LAYERED
+            );
+        }
+
+
+        private void NavBar_MouseLeftButtonDown(
+            object sender,
+            System.Windows.Input.MouseButtonEventArgs e
+        )
+        {
+            if (e.ChangedButton != MouseButton.Left)
+            {
+                return;
+            }
+
+            DependencyObject? current =
+                e.OriginalSource as DependencyObject;
+
+            while (current != null)
+            {
+                if (
+                    current is WpfButton ||
+                    current is Slider ||
+                    current is System.Windows.Controls.TextBox
+                )
+                {
+                    return;
+                }
+
+                current =
+                    VisualTreeHelper.GetParent(current);
+            }
+
+            try
+            {
+                DragMove();
+            }
+            catch
+            {
+            }
+        }
+
+
+        private void CloseOverlayButton_Click(
+            object sender,
+            RoutedEventArgs e
+        )
+        {
+            Close();
+        }
+
+
+        private void ResetWindowOpacityToOpaque()
+        {
+            if (OpacitySlider != null)
+            {
+                OpacitySlider.Value = 100;
+                return;
+            }
+
+            ApplyWindowOpacity(100);
+        }
+
+
+        private static int GetExtendedStyle(
+            IntPtr hwnd
+        )
+        {
+            return unchecked(
+                (int)GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64()
+            );
+        }
+
+
+        private void SetExtendedStyle(
+            IntPtr hwnd,
+            int exStyle
+        )
+        {
+            SetWindowLongPtr(
+                hwnd,
+                GWL_EXSTYLE,
+                new IntPtr(exStyle)
+            );
+
+            SetWindowPos(
+                hwnd,
+                IntPtr.Zero,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE |
+                SWP_NOSIZE |
+                SWP_NOZORDER |
+                SWP_NOACTIVATE |
+                SWP_FRAMECHANGED
+            );
+        }
+
+
         // =========================================================
         // GLOBAL HOTKEY REGISTRATION
         // =========================================================
@@ -3278,6 +4294,7 @@ namespace PrivateBrowser
             UnregisterHotKey(_windowHandle, HOTKEY_COPY_LATEST_AND_SEND);
             UnregisterHotKey(_windowHandle, HOTKEY_PASTE_AND_SEND);
             UnregisterHotKey(_windowHandle, HOTKEY_TOGGLE_BROWSER);
+            UnregisterHotKey(_windowHandle, HOTKEY_SCREENSHOT);
 
             RegisterRequiredHotkey(
                 HOTKEY_LATEST_CAPTION,
@@ -3307,6 +4324,12 @@ namespace PrivateBrowser
                 HOTKEY_TOGGLE_BROWSER,
                 VK_Q,
                 "Ctrl + Shift + Q"
+            );
+
+            RegisterRequiredHotkey(
+                HOTKEY_SCREENSHOT,
+                VK_X,
+                "Ctrl + Shift + X"
             );
         }
 
@@ -3351,6 +4374,51 @@ namespace PrivateBrowser
                 WpfMessageBoxButton.OK,
                 WpfMessageBoxImage.Warning
             );
+        }
+
+
+        private bool IsScreenPointOverBrowser(
+            IntPtr lParam
+        )
+        {
+            if (
+                Browser == null ||
+                !Browser.IsVisible ||
+                Browser.ActualWidth <= 0 ||
+                Browser.ActualHeight <= 0
+            )
+            {
+                return false;
+            }
+
+            try
+            {
+                int packed =
+                    unchecked((int)lParam.ToInt64());
+
+                int screenX =
+                    (short)(packed & 0xFFFF);
+
+                int screenY =
+                    (short)((packed >> 16) & 0xFFFF);
+
+                System.Windows.Point local =
+                    Browser.PointFromScreen(
+                        new System.Windows.Point(
+                            screenX,
+                            screenY
+                        )
+                    );
+
+                return local.X >= 0 &&
+                    local.Y >= 0 &&
+                    local.X < Browser.ActualWidth &&
+                    local.Y < Browser.ActualHeight;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
 
@@ -3430,6 +4498,22 @@ namespace PrivateBrowser
                     TogglePrivateBrowser();
 
                     handled = true;
+
+                    break;
+
+
+                case HOTKEY_SCREENSHOT:
+
+                    handled = true;
+
+                    Dispatcher.BeginInvoke(
+                        new Action(
+                            async () =>
+                            {
+                                await CaptureScreenshotAndAttachToChatGptAsync();
+                            }
+                        )
+                    );
 
                     break;
             }
@@ -3822,6 +4906,14 @@ namespace PrivateBrowser
             _captionStore.Changed -=
                 CaptionStore_Changed;
 
+            try
+            {
+                _browserOverlay?.Close();
+            }
+            catch
+            {
+            }
+
             _systemAudioCapture.AudioAvailable -=
                 SystemAudioCapture_AudioAvailable;
             _microphoneCapture.AudioAvailable -=
@@ -3884,6 +4976,10 @@ namespace PrivateBrowser
                     _windowHandle,
                     HOTKEY_TOGGLE_BROWSER
                 );
+                UnregisterHotKey(
+                    _windowHandle,
+                    HOTKEY_SCREENSHOT
+                );
             }
         }
 
@@ -3929,6 +5025,15 @@ namespace PrivateBrowser
             _captionStore.Clear();
 
             UpdateCaptionPanel();
+        }
+
+
+        private async void ScreenshotButton_Click(
+            object sender,
+            RoutedEventArgs e
+        )
+        {
+            await CaptureScreenshotAndAttachToChatGptAsync();
         }
 
 
@@ -4002,8 +5107,473 @@ namespace PrivateBrowser
             }
         }
 
+        private async Task CaptureScreenshotAndAttachToChatGptAsync()
+        {
+            if (_screenshotBusy)
+            {
+                return;
+            }
+
+            _screenshotBusy = true;
+
+            string? tempPath = null;
+
+            try
+            {
+                if (Browser.CoreWebView2 == null)
+                {
+                    return;
+                }
+
+                string currentUrl =
+                    Browser.Source?.ToString() ??
+                    string.Empty;
+
+                if (
+                    !currentUrl.Contains(
+                        "chatgpt.com",
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
+                {
+                    WpfMessageBox.Show(
+                        "Please open ChatGPT first.",
+                        "PrivateBrowser",
+                        WpfMessageBoxButton.OK,
+                        WpfMessageBoxImage.Information
+                    );
+
+                    return;
+                }
+
+                Drawing.Rectangle bounds =
+                    GetScreenshotBounds();
+
+                if (
+                    bounds.Width <= 0 ||
+                    bounds.Height <= 0
+                )
+                {
+                    WpfMessageBox.Show(
+                        "Could not determine a screen to capture.",
+                        "PrivateBrowser",
+                        WpfMessageBoxButton.OK,
+                        WpfMessageBoxImage.Warning
+                    );
+
+                    return;
+                }
+
+                bool hidForCapture = false;
+
+                if (!_browserHiddenByHotkey)
+                {
+                    HidePrivateBrowserByHotkey();
+                    hidForCapture = true;
+                    await Task.Delay(180);
+                }
+
+                Drawing.Bitmap bitmap;
+
+                try
+                {
+                    bitmap = CaptureScreenBounds(bounds);
+                }
+                finally
+                {
+                    if (hidForCapture)
+                    {
+                        RestorePrivateBrowserFromHotkey();
+                    }
+                }
+
+                using (bitmap)
+                {
+                    tempPath = SaveScreenshotPng(bitmap);
+                    await SetClipboardImageAsync(bitmap);
+                }
+
+                Activate();
+                Browser.Focus();
+                await Task.Delay(120);
+
+                bool attached =
+                    await AttachScreenshotFileToChatGptAsync(tempPath);
+
+                if (!attached)
+                {
+                    await FocusChatGptComposerAsync();
+                    await Task.Delay(80);
+                    await PasteClipboardImageIntoChatGptAsync();
+                    await Task.Delay(450);
+                }
+                else
+                {
+                    await Task.Delay(350);
+                }
+
+                await PasteIntoChatGptAndSendAsync(
+                    ScreenshotAnalysisPrompt,
+                    send: false,
+                    replaceExisting: false
+                );
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Screenshot capture failed: {ex}"
+                );
+
+                WpfMessageBox.Show(
+                    $"Screenshot capture failed:\n\n{ex.Message}",
+                    "PrivateBrowser",
+                    WpfMessageBoxButton.OK,
+                    WpfMessageBoxImage.Warning
+                );
+            }
+            finally
+            {
+                _screenshotBusy = false;
+
+                if (!string.IsNullOrWhiteSpace(tempPath))
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await Task.Delay(8000);
+                            if (File.Exists(tempPath))
+                            {
+                                File.Delete(tempPath);
+                            }
+                        }
+                        catch
+                        {
+                        }
+                    });
+                }
+            }
+        }
+
+        private Drawing.Rectangle GetScreenshotBounds()
+        {
+            Forms.Screen? primary =
+                Forms.Screen.PrimaryScreen;
+
+            if (
+                primary != null &&
+                primary.Bounds.Width > 0 &&
+                primary.Bounds.Height > 0
+            )
+            {
+                return primary.Bounds;
+            }
+
+            return Forms.SystemInformation.VirtualScreen;
+        }
+
+        private static Drawing.Bitmap CaptureScreenBounds(
+            Drawing.Rectangle bounds
+        )
+        {
+            var bitmap = new Drawing.Bitmap(
+                bounds.Width,
+                bounds.Height,
+                Drawing.Imaging.PixelFormat.Format32bppArgb
+            );
+
+            using (var graphics = Drawing.Graphics.FromImage(bitmap))
+            {
+                graphics.CopyFromScreen(
+                    bounds.Left,
+                    bounds.Top,
+                    0,
+                    0,
+                    bounds.Size,
+                    Drawing.CopyPixelOperation.SourceCopy
+                );
+            }
+
+            return bitmap;
+        }
+
+        private static string SaveScreenshotPng(
+            Drawing.Bitmap bitmap
+        )
+        {
+            string folder = Path.Combine(
+                Path.GetTempPath(),
+                "PrivateBrowser"
+            );
+
+            Directory.CreateDirectory(folder);
+
+            string path = Path.Combine(
+                folder,
+                $"screenshot-{Guid.NewGuid():N}.png"
+            );
+
+            bitmap.Save(path, Drawing.Imaging.ImageFormat.Png);
+            return path;
+        }
+
+        private async Task SetClipboardImageAsync(
+            Drawing.Bitmap bitmap
+        )
+        {
+            using var pngStream = new MemoryStream();
+            bitmap.Save(pngStream, Drawing.Imaging.ImageFormat.Png);
+            byte[] pngBytes = pngStream.ToArray();
+
+            var image = new BitmapImage();
+            using (var loadStream = new MemoryStream(pngBytes))
+            {
+                image.BeginInit();
+                image.CacheOption = BitmapCacheOption.OnLoad;
+                image.StreamSource = loadStream;
+                image.EndInit();
+            }
+
+            image.Freeze();
+
+            const int maxAttempts = 12;
+            const int delayMs = 80;
+
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                try
+                {
+                    var data = new WpfDataObject();
+                    data.SetImage(image);
+                    data.SetData("PNG", new MemoryStream(pngBytes));
+                    WpfClipboard.SetDataObject(data, true);
+                    return;
+                }
+                catch (COMException ex)
+                when (
+                    unchecked((uint)ex.HResult) == 0x800401D0
+                )
+                {
+                    await Task.Delay(delayMs);
+                }
+            }
+        }
+
+        private async Task<bool> AttachScreenshotFileToChatGptAsync(
+            string pngPath
+        )
+        {
+            if (
+                Browser.CoreWebView2 == null ||
+                string.IsNullOrWhiteSpace(pngPath) ||
+                !File.Exists(pngPath)
+            )
+            {
+                return false;
+            }
+
+            try
+            {
+                const string markScript =
+                    """
+                    (() => {
+                        document.querySelectorAll('[data-pb-upload]').forEach((el) => {
+                            el.removeAttribute('data-pb-upload');
+                        });
+
+                        const inputs = Array.from(document.querySelectorAll('input[type="file"]'));
+                        const target = inputs.find((el) => {
+                            const accept = (el.accept || '').toLowerCase();
+                            return accept.includes('image') ||
+                                accept.includes('png') ||
+                                accept.includes('*') ||
+                                accept === '';
+                        }) || inputs[0];
+
+                        if (!target) {
+                            const attach = document.querySelector(
+                                'button[aria-label*="Attach" i], button[aria-label*="Add files" i], button[aria-label*="Upload" i], button[data-testid="composer-plus-btn"]'
+                            );
+                            if (attach) {
+                                attach.click();
+                            }
+                            return false;
+                        }
+
+                        target.setAttribute('data-pb-upload', '1');
+                        return true;
+                    })()
+                    """;
+
+                string marked =
+                    await Browser.CoreWebView2.ExecuteScriptAsync(markScript);
+
+                if (
+                    marked == null ||
+                    !marked.Contains("true", StringComparison.OrdinalIgnoreCase)
+                )
+                {
+                    await Task.Delay(220);
+                    marked =
+                        await Browser.CoreWebView2.ExecuteScriptAsync(markScript);
+                }
+
+                if (
+                    marked == null ||
+                    !marked.Contains("true", StringComparison.OrdinalIgnoreCase)
+                )
+                {
+                    return false;
+                }
+
+                await Browser.CoreWebView2.CallDevToolsProtocolMethodAsync(
+                    "DOM.enable",
+                    "{}"
+                );
+
+                string documentJson =
+                    await Browser.CoreWebView2.CallDevToolsProtocolMethodAsync(
+                        "DOM.getDocument",
+                        "{\"depth\":0,\"pierce\":true}"
+                    );
+
+                using JsonDocument document = JsonDocument.Parse(documentJson);
+                int rootNodeId = document.RootElement
+                    .GetProperty("root")
+                    .GetProperty("nodeId")
+                    .GetInt32();
+
+                string queryJson = JsonSerializer.Serialize(
+                    new
+                    {
+                        nodeId = rootNodeId,
+                        selector = "input[type=\"file\"][data-pb-upload=\"1\"]"
+                    }
+                );
+
+                string nodeJson =
+                    await Browser.CoreWebView2.CallDevToolsProtocolMethodAsync(
+                        "DOM.querySelector",
+                        queryJson
+                    );
+
+                using JsonDocument nodeDocument = JsonDocument.Parse(nodeJson);
+                int nodeId = nodeDocument.RootElement
+                    .GetProperty("nodeId")
+                    .GetInt32();
+
+                if (nodeId == 0)
+                {
+                    return false;
+                }
+
+                string filesJson = JsonSerializer.Serialize(
+                    new
+                    {
+                        files = new[] { pngPath },
+                        nodeId
+                    }
+                );
+
+                await Browser.CoreWebView2.CallDevToolsProtocolMethodAsync(
+                    "DOM.setFileInputFiles",
+                    filesJson
+                );
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"ChatGPT screenshot attach failed: {ex}"
+                );
+
+                return false;
+            }
+        }
+
+        private async Task FocusChatGptComposerAsync()
+        {
+            if (Browser.CoreWebView2 == null)
+            {
+                return;
+            }
+
+            const string script =
+                """
+                (() => {
+                    const prompt = document.querySelector('#prompt-textarea, [data-testid="prompt-textarea"], div.ProseMirror[contenteditable="true"]');
+                    if (!prompt) {
+                        return false;
+                    }
+                    prompt.focus();
+                    prompt.click();
+                    return true;
+                })()
+                """;
+
+            await Browser.CoreWebView2.ExecuteScriptAsync(script);
+        }
+
+        private async Task PasteClipboardImageIntoChatGptAsync()
+        {
+            if (Browser.CoreWebView2 != null)
+            {
+                try
+                {
+                    await Browser.CoreWebView2.CallDevToolsProtocolMethodAsync(
+                        "Input.dispatchKeyEvent",
+                        "{\"type\":\"keyDown\",\"modifiers\":2,\"windowsVirtualKeyCode\":17,\"key\":\"Control\",\"code\":\"ControlLeft\"}"
+                    );
+                    await Browser.CoreWebView2.CallDevToolsProtocolMethodAsync(
+                        "Input.dispatchKeyEvent",
+                        "{\"type\":\"keyDown\",\"modifiers\":2,\"windowsVirtualKeyCode\":86,\"key\":\"v\",\"code\":\"KeyV\"}"
+                    );
+                    await Browser.CoreWebView2.CallDevToolsProtocolMethodAsync(
+                        "Input.dispatchKeyEvent",
+                        "{\"type\":\"keyUp\",\"modifiers\":2,\"windowsVirtualKeyCode\":86,\"key\":\"v\",\"code\":\"KeyV\"}"
+                    );
+                    await Browser.CoreWebView2.CallDevToolsProtocolMethodAsync(
+                        "Input.dispatchKeyEvent",
+                        "{\"type\":\"keyUp\",\"modifiers\":0,\"windowsVirtualKeyCode\":17,\"key\":\"Control\",\"code\":\"ControlLeft\"}"
+                    );
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"CDP paste failed: {ex}"
+                    );
+                }
+            }
+
+            SendCtrlV();
+        }
+
+        private static void SendCtrlV()
+        {
+            INPUT[] inputs = new INPUT[4];
+
+            inputs[0].type = INPUT_KEYBOARD;
+            inputs[0].U.ki.wVk = VK_CONTROL;
+
+            inputs[1].type = INPUT_KEYBOARD;
+            inputs[1].U.ki.wVk = (ushort)VK_V;
+
+            inputs[2].type = INPUT_KEYBOARD;
+            inputs[2].U.ki.wVk = (ushort)VK_V;
+            inputs[2].U.ki.dwFlags = KEYEVENTF_KEYUP;
+
+            inputs[3].type = INPUT_KEYBOARD;
+            inputs[3].U.ki.wVk = VK_CONTROL;
+            inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
+
+            SendInput((uint)inputs.Length, inputs, INPUT.Size);
+        }
+
         private async Task PasteIntoChatGptAndSendAsync(
-            string text
+            string text,
+            bool send = true,
+            bool replaceExisting = true
         )
         {
             if (
@@ -4043,10 +5613,18 @@ namespace PrivateBrowser
                     text
                 );
 
+            string shouldSendJs =
+                send ? "true" : "false";
+
+            string replaceExistingJs =
+                replaceExisting ? "true" : "false";
+
             string script =
                 $$"""
                 (async () => {
                     const text = {{encodedText}};
+                    const shouldSend = {{shouldSendJs}};
+                    const replaceExisting = {{replaceExistingJs}};
 
                     const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -4162,12 +5740,27 @@ namespace PrivateBrowser
                             el instanceof HTMLTextAreaElement ||
                             el instanceof HTMLInputElement
                         ) {
-                            insertIntoTextarea(el, value);
+                            insertIntoTextarea(
+                                el,
+                                replaceExisting ? value : ((el.value || '') + value)
+                            );
                             await wait(50);
                             return composerHasText(el, value);
                         }
 
-                        selectAll(el);
+                        if (replaceExisting) {
+                            selectAll(el);
+                        } else {
+                            try {
+                                const selection = window.getSelection();
+                                const range = document.createRange();
+                                range.selectNodeContents(el);
+                                range.collapse(false);
+                                selection.removeAllRanges();
+                                selection.addRange(range);
+                            } catch { }
+                        }
+
                         try {
                             document.execCommand('insertText', false, value);
                         } catch { }
@@ -4177,7 +5770,9 @@ namespace PrivateBrowser
                             return true;
                         }
 
-                        selectAll(el);
+                        if (replaceExisting) {
+                            selectAll(el);
+                        }
                         try {
                             const dataTransfer = new DataTransfer();
                             dataTransfer.setData('text/plain', value);
@@ -4287,6 +5882,13 @@ namespace PrivateBrowser
                             });
                         }
 
+                        if (!shouldSend) {
+                            return JSON.stringify({
+                                success: true,
+                                method: 'draft'
+                            });
+                        }
+
                         for (let i = 0; i < 20; i++) {
                             const sendButton = findSendButton();
                             if (sendButton) {
@@ -4327,29 +5929,26 @@ namespace PrivateBrowser
             );
         }
 
-        // private void OpacitySlider_ValueChanged(
-        //     object sender,
-        //     RoutedPropertyChangedEventArgs<double> e
-        // )
-        // {
-        //     double percent =
-        //         e.NewValue;
+        private void OpacitySlider_ValueChanged(
+            object sender,
+            RoutedPropertyChangedEventArgs<double> e
+        )
+        {
+            double percent =
+                Math.Clamp(
+                    e.NewValue,
+                    10,
+                    100
+                );
 
-        //     this.Opacity =
-        //         Math.Clamp(
-        //             percent / 100.0,
-        //             0.10,
-        //             1.0
-        //         );
+            if (OpacityValueText != null)
+            {
+                OpacityValueText.Text =
+                    $"{Math.Round(percent)}%";
+            }
 
-        //     if (
-        //         OpacityValueText != null
-        //     )
-        //     {
-        //         OpacityValueText.Text =
-        //             $"{Math.Round(percent)}%";
-        //     }
-        // }
+            ApplyWindowOpacity(percent);
+        }
 
         private void MicrophoneCapture_AudioAvailable(
             byte[] buffer,

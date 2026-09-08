@@ -1,0 +1,66 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="PrivateBrowser.Mac.Views.ActivationWindow"
+        Title="PrivateBrowser Activation"
+        Width="560"
+        Height="420"
+        WindowStartupLocation="CenterScreen">
+    <Grid Margin="28" RowDefinitions="Auto,Auto,Auto,Auto,*,Auto">
+        <TextBlock Grid.Row="0"
+                   Text="PrivateBrowser Activation"
+                   FontSize="24"
+                   FontWeight="SemiBold"
+                   Margin="0,0,0,24"/>
+
+        <StackPanel Grid.Row="1" Margin="0,0,0,20">
+            <TextBlock Text="Device ID" FontWeight="SemiBold" Margin="0,0,0,8"/>
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBox x:Name="DeviceIdTextBox"
+                         IsReadOnly="True"
+                         Height="38"/>
+                <Button Grid.Column="1"
+                        x:Name="CopyDeviceIdButton"
+                        Content="Copy"
+                        Width="90"
+                        Height="38"
+                        Margin="10,0,0,0"
+                        Click="CopyDeviceIdButton_Click"/>
+            </Grid>
+        </StackPanel>
+
+        <StackPanel Grid.Row="2" Margin="0,0,0,18">
+            <TextBlock Text="License Key" FontWeight="SemiBold" Margin="0,0,0,8"/>
+            <TextBox x:Name="LicenseKeyTextBox" Height="38"/>
+        </StackPanel>
+
+        <TextBlock Grid.Row="3"
+                   Text="Copy your Device ID and send it to the administrator. You will receive a license key generated specifically for this device."
+                   TextWrapping="Wrap"
+                   Foreground="Gray"
+                   Margin="0,0,0,20"/>
+
+        <Border Grid.Row="4"
+                Background="#F5F5F5"
+                CornerRadius="6"
+                Padding="12"
+                Margin="0,0,0,20">
+            <TextBlock Text="One license key can only be used on this device."
+                       TextWrapping="Wrap"
+                       Foreground="#555555"/>
+        </Border>
+
+        <StackPanel Grid.Row="5"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right">
+            <Button Content="Cancel"
+                    Width="100"
+                    Height="38"
+                    Margin="0,0,10,0"
+                    Click="CancelButton_Click"/>
+            <Button Content="Activate"
+                    Width="110"
+                    Height="38"
+                    Click="ActivateButton_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

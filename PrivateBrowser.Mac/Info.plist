@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>ChatGPT PrivateBrowser</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.privatebrowser.mac</string>
+  <key>CFBundleVersion</key>
+  <string>1.0.0</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>PrivateBrowser transcribes your microphone for live interview captions.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>PrivateBrowser captures system audio so interviewer speech can be transcribed.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>PrivateBrowser needs Screen Recording permission to capture the main display for ChatGPT screenshots and to capture meeting audio for captions.</string>
+</dict>
+</plist>
